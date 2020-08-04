@@ -1,0 +1,2 @@
+#  Risk factors for mortality among hospitalized patients with COVID-19
+This repository contains code and output for the manuscript titled "Risk factors for mortality among hospitalized patients with COVID-19". 
