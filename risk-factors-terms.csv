@@ -1,0 +1,101 @@
+term,term2,termlab,var
+sexFemale,sex - Female:Male,Female,sex
+age,age,Age,age
+age',age',Age',age
+calendar_time,calendar_time,Time since first case,calendar_time
+calendar_time',calendar_time',Time since first case',calendar_time
+race_ethnicityAsian,race_ethnicity - Asian:Non-Hispanic white,Asian,race_ethnicity
+race_ethnicityHispanic,race_ethnicity - Hispanic:Non-Hispanic white,Hispanic,race_ethnicity
+race_ethnicityNonHispanic_black,race_ethnicity - Non-Hispanic black:Non-Hispanic white,Non-Hispanic Black,race_ethnicity
+divisionEast_North_Central,division - East North Central:Pacific,East North Central,division
+divisionOther,division - Other:Pacific,Other division,division
+divisionMiddle_Atlantic,division - Middle Atlantic:Pacific,Middle Atlantic,division
+divisionMountain,division - Mountain:Pacific,Mountain,division
+divisionNew_England,division - New England:Pacific,New England,division
+divisionSouth_AtlWest_South_Crl,division - South Atl/West South Crl:Pacific,South Atlantic/West South Central,division
+divisionWest_North_Central,division - West North Central:Pacific,West North Central,division
+amiYes,ami - Yes:No,Acute myocardial infarction,ami
+chfYes,chf - Yes:No,Congestive heart failure,chf
+rheumdYes,rheumd - Yes:No,Rheumatoid disease,rheumd
+pudYes,pud - Yes:No,Peptic ulcer disease,pud
+mldYes,mld - Yes:No,Mild liver disease,mld
+diabuncYes,diabunc - Yes:No,Diabetes (no complications),diabunc
+diabwcYes,diabwc - Yes:No,Diabetes (complications),diabwc
+diabYes,diab - Yes:No,Diabetes,diab
+hpYes,hp - Yes:No,Hemiplegia or paraplegia,hp
+rendYes,rend - Yes:No,Renal disease,rend
+cancYes,canc - Yes:No,Cancer,canc
+msldYes,msld - Yes:No,Moderate/severe liver disease,msld
+metacancYes,metacanc - Yes:No,Metastatic cancer,metacanc
+aidsYes,aids - Yes:No,AIDS/HIV,aids
+pvdYes,pvd - Yes:No,Peripheral vascular disease,pvd
+cevdYes,cevd - Yes:No,Cerebrovascular disease,cevd
+dementiaYes,dementia - Yes:No,Dementia,dementia
+copdYes,copd - Yes:No,COPD,copd
+hypuncYes,hypunc - Yes:No,Hypertension (no complications),hypunc
+hypcYes,hypc - Yes:No,Hypertension (complications),hypc
+hypYes,hyp - Yes:No,Hypertension,hyp
+asthmaYes,asthma - Yes:No,Asthma,asthma
+smokeCurrent,smoke - Current:Never,Current smoker,smoke
+smokePrevious,smoke - Previous:Never,Previous smoker,smoke
+bmi,bmi,BMI,bmi
+bmi',bmi',BMI',bmi
+bmi_catUnderweight,bmi_cat - Underweight:Normal,Underweight,bmi_cat
+bmi_catOverweight,bmi_cat - Overweight:Normal,Overweight,bmi_cat
+bmi_catObese,bmi_cat - Obese:Normal,Obese,bmi_cat
+dbp,dbp,Diastolic blood pressure,dbp
+dbp',dbp',Diastolic blood pressure',dbp
+sbp,sbp,Systolic blood pressure,sbp
+sbp',sbp',Systolic blood pressure',sbp
+hr,hr,Heart rate,hr
+hr',hr',Heart rate',hr
+resp,resp,Respiration rate,resp
+resp',resp',Respiration rate',resp
+temp,temp,Temperature,temp
+temp',temp',Temperature',temp
+spo2,spo2,Oxygen saturation,spo2
+spo2',spo2',Oxygen saturation',spo2
+alt,alt,Alanine aminotransferase,alt
+alt',alt',Alanine aminotransferase',alt
+alt_t,alt_t,Alanine aminotransferase,alt_t
+alt_t',alt_t',Alanine aminotransferase',alt_t
+ast,ast,Aspartate aminotransferase,ast
+ast',ast',Aspartate aminotransferase',ast
+ast_t,ast_t,Aspartate aminotransferase,ast_t
+ast_t',ast_t',Aspartate aminotransferase',ast_t
+crp,crp,C-reactive protein,crp
+crp',crp',C-reactive protein',crp
+crp_t,crp_t,C-reactive protein,crp_t
+crp_t',crp_t',C-reactive protein',crp_t
+ferritin,ferritin,Ferritin,ferritin
+ferritin',ferritin',Ferritin',ferritin
+ferritin_t,ferritin_t,Ferritin,ferritin_t
+ferritin_t',ferritin_t',Ferritin',ferritin_t
+creatinine,creatinine,Creatinine,creatinine
+creatinine',creatinine',Creatinine',creatinine
+creatinine_t,creatinine_t,Creatinine,creatinine_t
+creatinine_t',creatinine_t',Creatinine',creatinine_t
+tni,tni,Troponin I,tni
+tni',tni',Troponin I',tni
+tni_t,tni_t,Troponin I,tni_t
+tni_t',tni_t',Troponin I',tni_t
+ldh,ldh,Lactate dehydrogenase (LDH),ldh
+ldh',ldh',Lactate dehydrogenase (LDH)',ldh
+ldh_t,ldh_t,Lactate dehydrogenase (LDH),ldh_t
+ldh_t',ldh_t',Lactate dehydrogenase (LDH)',ldh_t
+lymphocyte,lymphocyte,Lymphocyte count,lymphocyte
+lymphocyte',lymphocyte',Lymphocyte count',lymphocyte
+lymphocyte_t,lymphocyte_t,Lymphocyte count,lymphocyte_t
+lymphocyte_t',lymphocyte_t',Lymphocyte count',lymphocyte_t
+neutrophil,neutrophil,Neutrophil count,neutrophil
+neutrophil',neutrophil',Neutrophil count',neutrophil
+neutrophil_t,neutrophil_t,Neutrophil count,neutrophil_t
+neutrophil_t',neutrophil_t',Neutrophil count',neutrophil_t
+plt,plt,Platelet count (PLT),plt
+plt',plt',Platelet count (PLT)',plt
+plt_t,plt_t,Platelet count (PLT),plt_t
+plt_t',plt_t',Platelet count (PLT)',plt_t
+wbc,wbc,White blood cell count (WBC),wbc
+wbc',wbc',White blood cell count (WBC)',wbc
+wbc_t,wbc_t,White blood cell count (WBC),wbc_t
+wbc_t',wbc_t',White blood cell count (WBC)',wbc_t

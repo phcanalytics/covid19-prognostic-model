@@ -1,0 +1,1658 @@
+---
+title: 'Supplement: Risk factors for mortality among hospitalized patients with COVID-19'
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    toc: yes
+    toc_depth: 2
+    toc_float: true
+    number_sections: TRUE
+    code_folding: show
+---
+
+# Dependencies and settings
+```{r, warning = FALSE, message = FALSE}
+# R packages
+library("corrr") # 0.4.2
+library("cowplot") # 1.0.0
+library("dplyr") # 1.0.0
+library("ggplot2") # 3.3.1
+library("oem") # 2.0.10
+library("gridExtra") # 2.3
+library("knitr") # 1.28
+library("kableExtra") # 1.1.0
+library("magrittr") # 1.5
+library("mice") # 3.9.0
+library("pROC") # 1.16.2
+library("purrr") # 0.3.4
+library("rcompanion") # 2.3.25
+library("rms") # 6.0.1
+library("splines") # base
+library("tibble") # 3.0.1
+library("tidyr") # 1.1.0
+
+# Settings
+set.seed(123)
+theme_set(theme_bw())
+
+# Namespace clash
+select <- dplyr::select
+```
+
+# Data
+## Load
+```{r}
+train_data <- readRDS("train_data.rds")  %>%
+  filter(age >= 18) %>%
+  filter(as.Date("2020-06-05") - index_date > 14)
+```
+
+## Clean 
+```{r}
+# Recoding
+train_data <- train_data %>% 
+  mutate(
+    ## "died" in add_deaths() should be an integer
+    died = as.integer(died),
+    
+    ## Convert unknown or other/unknown to missing
+    race = ifelse(race == "Other/Unknown", NA, race),
+    ethnicity = ifelse(ethnicity == "Unknown", NA, ethnicity),
+    sex = ifelse(sex == "Unknown", NA, sex),
+    
+    ## Oxygen saturation should have plausible values
+    spo2 = ifelse(spo2 == 0, NA_real_, spo2),
+    spo2 = ifelse(spo2 > 100, 100, spo2)
+  ) %>%
+  
+  ## Add option for comorbidities in create_comorbidities() to be character
+  rename(diabunc = diab) %>%
+  mutate_at(
+    c("ami", "chf", "pvd", "cevd", "dementia", "copd", "rheumd", "pud",
+      "mld", "diabunc", "diabwc", "hp", "rend", "canc", "msld", "metacanc",
+      "aids", "hypc", "hypunc", "asthma"),
+    function (x) ifelse(x == 1, "Yes", "No")
+  ) 
+
+# Create "derived" variables
+train_data <- train_data %>%
+  mutate(
+    calendar_time = as.numeric(index_date - min(index_date)),
+    index_month = as.integer(format(index_date, "%m")),
+    death_month = as.integer(format(date_of_death,"%m")),
+    os_days = pmax(0, date_of_death - index_date),
+    
+    ## Categorize continuous vitals + labs
+    ### BMI
+    bmi_cat = case_when(
+      bmi < 18.5 ~ "Underweight",
+      bmi >= 18.5 & bmi < 25 ~ "Normal",
+      bmi >= 25 & bmi < 30 ~ "Overweight",
+      bmi >= 30 ~ "Obese",
+      TRUE ~ NA_character_
+    ),
+    
+    ### Blood pressure
+    bp_cat = case_when(
+      dbp < 80 | sbp < 120 ~ "Normal",
+      dbp < 80 & (sbp >= 120 & sbp < 130) ~ "Elevated",
+      dbp >= 80 | sbp >= 130 ~ "High",
+      TRUE ~ NA_character_
+    )
+  )
+
+# Function to add race/ethnicity variable to dataset (done after separately 
+# imputing missing race + ethnicity information)
+add_race_ethnicity <- function(data){
+ data %>% mutate(
+   race_ethnicity = case_when(
+    race == "Caucasian" & ethnicity != "Hispanic" ~ "Non-Hispanic white",
+    race == "African American" & ethnicity != "Hispanic" ~ "Non-Hispanic black",
+    race == "Asian" & ethnicity != "Hispanic" ~ "Asian",
+    TRUE ~ "Hispanic"
+  ),
+  race_ethnicity = relevel(factor(race_ethnicity), ref = "Non-Hispanic white")
+ )
+}
+```
+
+## Label
+```{r}
+# Labels
+## Categorical variables
+demographic_cat_vars <- tribble(
+  ~var, ~varlab,
+  "sex", "Sex",
+  "race", "Race",
+  "ethnicity", "Ethnicity",
+  "division", "Geographic division"
+) %>% 
+  mutate(group = "Demographics")
+
+comorbidity_vars <- tribble(
+  ~var, ~varlab,
+  "ami", "Acute myocardial infarction",
+  "chf", "Congestive heart failure",
+  "pvd", "Peripheral vascular disease",
+  "cevd", "Cerebrovascular disease",
+  "dementia", "Dementia",
+  "copd", "COPD",
+  "rheumd", "Rheumatoid disease",
+  "pud", "Peptic ulcer disease",
+  "mld", "Mild liver disease",
+  "diabunc", "Diabetes (no complications)",
+  "diabwc", "Diabetes (complications)",
+  "hp", "Hemiplegia or paraplegia",
+  "rend", "Renal disease",
+  "canc", "Cancer",
+  "msld", "Moderate/severe liver disease",
+  "metacanc", "Metastatic cancer",
+  "aids", "AIDS/HIV",
+  "hypunc", "Hypertension (no complications)",
+  "hypc", "Hypertension (complications)",
+  "asthma", "Asthma"
+) %>%
+  mutate(group = "Comorbidities")
+
+vital_cat_vars <- tribble(
+  ~var, ~varlab,
+  "smoke", "Smoking",
+  "bmi_cat", "Body Mass Index (BMI)",
+) %>%
+  mutate(group = "Vitals")
+
+cat_vars <- bind_rows(demographic_cat_vars,
+                      comorbidity_vars,
+                      vital_cat_vars)
+
+## Continuous variables
+demographic_continuous_vars <- tribble(
+  ~var, ~varlab,
+  "age", "Age",
+  "calendar_time", "Time since first case"
+) %>%
+  mutate(group = "Demographics")
+
+vital_continuous_vars <- tribble(
+  ~var, ~varlab,
+  "bmi", "Body Mass Index (BMI)",
+  "dbp", "Diastolic blood pressure",
+  "sbp", "Systolic blood pressure",
+  "hr", "Heart rate",
+  "resp", "Respiration rate",
+  "temp", "Temperature",
+) %>%
+  mutate(group = "Vitals")
+
+lab_vars <- tribble(
+  ~var, ~varlab,
+  "alt", "Alanine aminotransferase (ALT)",
+  "ast", "Aspartate aminotransferase (AST)",
+  "crp", "C-reactive protein (CRP)",
+  "creatinine", "Creatinine",
+  "ferritin", "Ferritin",
+  "d_dimer", "Fibrin D-Dimer",
+  "ldh", "Lactate dehydrogenase (LDH)",
+  "lymphocyte", "Lymphocyte count",
+  "neutrophil", "Neutrophil count",
+  "spo2", "Oxygen saturation",
+  "pct", "Procalcitonin",
+  "tni", "Troponin I",
+  "plt", "Platelet count (PLT)",
+  "wbc", "White blood cell count (WBC)"
+) %>%
+  mutate(group = "Labs")
+
+continuous_vars <- bind_rows(
+  demographic_continuous_vars,
+  vital_continuous_vars,
+  lab_vars
+)
+
+# Binary outcomes
+binary_outcomes <- tribble(
+  ~var, ~varlab,
+  "died", "Died" 
+)
+
+# All variables
+vars <- bind_rows(cat_vars,
+                  continuous_vars)
+
+get_var_labs <- function(v){
+  vars$varlab[match(v, vars$var)]
+}
+```
+
+# Preliminary data analysis
+
+## Sample size
+```{r}
+train_data %>%
+  count(name = "Sample size") %>% 
+  mutate(Data = "Optum training set") %>%
+  select(Data, `Sample size`) %>%
+  kable() %>%
+  kable_styling()
+```
+
+## Missing data
+```{r}
+missing_df <- train_data %>%
+  select(one_of(vars$var)) %>%
+  mutate_all(function (x) ifelse(is.na(x), 1, 0)) %>%
+  mutate(id = factor(1:n())) %>%
+  pivot_longer(cols = vars$var, names_to = "var", values_to = "missing") %>%
+  left_join(vars, by = "var")
+```
+
+### Proportion missing
+```{r, fig.height=8, fig.width = 8}
+# Compute proportion missing
+prop_missing <- missing_df %>%
+  group_by(varlab) %>%
+  summarise(prop = mean(missing))
+
+# Plot
+ggplot(prop_missing, aes(x = varlab, y = prop)) +
+  geom_bar(stat = "identity") + 
+  geom_text(aes(label = formatC(prop, format = "f", digits = 2)),
+          nudge_y = .03, size = 3) +
+ylim(c(0, 1)) +
+xlab("") +
+ylab("Proportion") +
+coord_flip() +
+scale_x_discrete(limits = rev(sort(vars$varlab)))
+```
+
+
+### Missing by patient
+```{r, fig.height = 7, fig.width = 7}
+ggplot(missing_df,
+       aes(x = id, y = varlab,  fill = factor(missing))) +
+  geom_raster() + 
+  theme(axis.title.x = element_blank(),
+        axis.text.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        axis.title.y = element_blank(),
+        legend.position = "bottom") +
+  scale_fill_manual(name = "Missing",
+                    values = c("lightgrey", "steelblue"),
+                    labels = c("No", "Yes")) +
+  scale_y_discrete(limits = rev(sort(vars$varlab)))
+```
+
+```{r, fig.height = 6, fig.width = 6}
+missing_df %>% 
+  # Count of missing by patient
+  group_by(id) %>%
+  summarise(n_missing = sum(missing),
+            prop_missing = n_missing/n()) %>%
+  
+  # Plot
+ ggplot(aes(x = prop_missing)) +
+  geom_histogram(binwidth = .03, color = "white") +
+  scale_x_continuous(breaks = seq(0, 1, .05)) +
+  scale_y_continuous(n.breaks = 20) +
+  xlab("Proportion of covariates that are missing") +
+  ylab("Count") 
+```
+
+## Distributions
+
+### Covariates
+#### Categorical
+```{r, fig.height = 8, fig.width = 11}
+cat_var_df <-  train_data %>%
+  select(one_of("ptid", cat_vars$var)) %>%
+  pivot_longer(cols = cat_vars$var, names_to = "var", values_to = "value") %>%
+  left_join(cat_vars, by = "var") %>%
+  filter(!is.na(value)) %>%
+  group_by(var, varlab, value) %>%
+  summarise(n = n()) %>%
+  group_by(varlab) %>%
+  mutate(freq = n / sum(n)) %>%
+  ungroup() %>%
+  mutate(
+    nudge_x = case_when(
+      freq < 0.5 ~ 0.15,
+      TRUE ~ -0.15
+    )
+  )
+
+ggplot(cat_var_df,
+       aes(x = freq, y = value)) +
+  geom_point() + 
+  geom_text(aes(label = formatC(freq, format = "f", digits = 2)),
+            nudge_x = cat_var_df$nudge_x, size = 3.75) +
+  facet_wrap(~varlab, scales = "free_y", ncol = 4) +
+  xlim(0, 1) +
+  xlab("Proportion") +
+  ylab("") +
+  theme(axis.text.x = element_text(size = 10),
+        axis.text.y = element_text(size = 10),
+        strip.text.x = element_text(size = 9))
+```
+
+#### Continuous
+##### Box plot
+```{r, fig.height = 7, fig.width = 10}
+pivot_continuous_longer <- function(data, vars){
+  col_names <- vars$var
+  train_data %>%
+    select(one_of("ptid", col_names)) %>%
+    pivot_longer(cols = col_names, 
+                 names_to = "var", 
+                 values_to = "value") %>%
+    left_join(vars, by = "var") %>%
+    filter(!is.na(value)) 
+}
+continuous_var_df <- pivot_continuous_longer(train_data, 
+                                             vars = continuous_vars)
+
+plot_box <- function(data){
+  ggplot(data, 
+       aes(x = varlab, y = value)) +
+  geom_boxplot(outlier.size = 1) + 
+  facet_wrap(~varlab, scales = "free") +
+  xlab("") +
+  ylab("Value") +
+   theme(axis.title.x=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank(),
+        strip.text = element_text(size = 7))
+}
+plot_box(continuous_var_df)
+
+```
+
+##### Histogram
+```{r, fig.height = 7, fig.width = 8}
+plot_hist <- function(data){
+  ggplot(data,
+       aes(x = value)) +
+  geom_histogram(bins = 40, color = "white") +
+  facet_wrap(~varlab, scales = "free") + 
+  xlab("") + ylab("Frequency")
+}
+plot_hist(continuous_var_df)
+```
+
+##### Outliers
+```{r}
+outer_fence <- function(v){
+  q1 <- quantile(v, .25, na.rm = TRUE)
+  q3 <- quantile(v, .75, na.rm = TRUE)
+  iq <- (q3 - q1)
+  return(as.numeric(q3 + 3 * iq))
+}
+
+format_percent <- function(x){
+  paste0(formatC(100 * x, format = "f", digits = 1), "%")
+}
+
+train_data %>%
+  select(one_of(lab_vars$var)) %>%
+  pivot_longer(cols = lab_vars$var, names_to = "Lab") %>%
+  filter(!is.na(value)) %>%
+  group_by(Lab) %>%
+  summarise(Maximum = max(value),
+            `99%` = quantile(value, .99), 
+            `Outer fence` = outer_fence(value),
+            `% above outer fence` = format_percent(mean(value > outer_fence(value)))) %>%
+  mutate(Lab = get_var_labs(Lab)) %>%
+  kable() %>%
+  kable_styling()
+```
+
+```{r}
+# Truncate labs using outer fence
+truncate_max <- function(v) outer_fence(v)
+
+for (i in 1:length(lab_vars$var)){
+  original_var <- lab_vars$var[i]
+  truncated_var <- paste0(original_var, "_t")
+  truncated_max_i <- truncate_max(train_data[[original_var]])
+  train_data <- train_data %>% mutate(
+    !!truncated_var := ifelse(get(original_var) > truncated_max_i, 
+                              truncated_max_i, 
+                              get(original_var))
+    )
+}
+```
+
+```{r, fig.height = 7, fig.width = 10}
+lab_vars_t <- lab_vars %>%
+  mutate(var = paste0(var, "_t"))
+vars <- bind_rows(vars, lab_vars_t) 
+
+continuous_vars_t <- bind_rows(
+  demographic_continuous_vars,
+  vital_continuous_vars,
+  lab_vars_t
+)
+
+continuous_var_t_df <- pivot_continuous_longer(train_data, 
+                                               vars = continuous_vars_t)
+plot_hist(continuous_var_t_df)
+```
+
+##### Scatterplots
+```{r, cache = TRUE}
+x_vars <- c("age")
+y_vars <- c("bmi")
+p <- vector(mode = "list", length = length(x_vars))
+for (i in 1:length(x_vars)){
+  p[[i]] <- ggplot(train_data, aes_string(x = x_vars[i], y = y_vars[i])) + 
+  geom_point() + 
+  #geom_smooth(method = "loess", formula = y ~ x) +
+  xlab(get_var_labs(x_vars[i])) +
+  ylab(get_var_labs(y_vars[i]))
+}
+do.call("grid.arrange", c(p, nrow = 1))
+```
+
+#### Correlations with race
+##### Race and age
+```{r, fig.height = 5, fig.width = 7}
+ggplot(train_data, 
+       aes(x = race, y = age)) +
+  geom_boxplot(outlier.size = 1) + 
+  xlab("") +
+  ylab(get_var_labs("age")) 
+```
+
+##### Race and comorbidities
+```{r, fig.height = 6, fig.width = 5}
+train_data %>%
+  group_by(race) %>%
+  summarise(`Unweighted` = mean(score),
+            `Weighted` = mean(wscore)) %>%
+  pivot_longer(cols = c("Unweighted", "Weighted"),
+               names_to = "score_type") %>%
+  
+  # Plot
+  ggplot(aes(x = race, y = value)) +
+    geom_bar(stat = "identity") +
+    facet_wrap(~score_type, nrow = 2) +
+    xlab("") +
+    ylab("Mean Charlson score") +
+    scale_fill_discrete("") 
+```
+
+
+```{r, fig.height = 7, fig.width = 10}
+train_data %>%
+  # Tidy table
+  filter(!is.na(race)) %>%
+  select(one_of(c("ptid", "race", comorbidity_vars$var))) %>%
+  pivot_longer(cols = comorbidity_vars$var, names_to = "comorbidity") %>%
+  left_join(comorbidity_vars %>% rename(comorbidity_lab = varlab),
+            by = c("comorbidity" = "var")) %>%
+  group_by(race, comorbidity_lab) %>%
+  summarise(prop = mean(1 * (value == "Yes"))) %>%
+  
+  # Plot
+  ggplot(aes(x = comorbidity_lab, y = prop, fill = race)) +
+    geom_bar(stat = "identity", position = "dodge") +
+    theme(axis.text.x = element_text(angle = 60, hjust = 1)) +
+    xlab("") +
+    ylab("Proportion") +
+    scale_fill_discrete("")
+```
+
+##### Race and region
+```{r, fig.height = 8, fig.width = 8}
+train_data %>%
+  # Tidy table
+  group_by(race, division) %>%
+  tally() %>%
+  group_by(race) %>%
+  mutate(prop = n/sum(n)) %>%
+  
+  # Plot
+  ggplot(aes(x = division, y = prop)) +
+    geom_bar(stat = "identity") +
+    facet_wrap(~race) +
+    theme(axis.text.x = element_text(angle = 60, hjust = 1)) +
+    xlab("") +
+    ylab("Proportion") 
+```
+
+### Outcomes
+```{r, fig.height = 4, fig.width = 6}
+train_data %>%
+  count(died) %>%
+  mutate(died = ifelse(died == 1, "Yes", "No"),
+         prop = n/sum(n)) %>%
+  ggplot(aes(x = died, y = prop)) +
+  geom_bar(stat = "identity") +
+  geom_text(aes(label = formatC(prop, format = "f", digits = 2)),
+            nudge_y = .03, size = 3) +
+  xlab("Died") +
+  ylab("Proportion") 
+```
+
+#### Time to death
+```{r, fig.height = 5, fig.width = 7}
+train_data %>%
+  mutate(months_to_death = death_month - index_month) %>%
+  filter(!is.na(months_to_death)) %>%
+  group_by( months_to_death) %>%
+  tally() %>%
+  
+  # Plot
+  ggplot(aes(x = factor(months_to_death), y = n)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  xlab("Months from index date to death") +
+  ylab("Count")
+```
+
+## Table 1
+```{r}
+train_data <- train_data %>%
+  add_race_ethnicity()
+```
+
+
+## Transformations of continuous variables
+```{r}
+fit_univariate_logit <- function(var, data){
+  make_f <- function(rhs){
+    as.formula(paste("died", rhs, sep =" ~ "))
+  }
+  fit_logit <- function(f, data){
+    glm(f, family = "binomial", data = data)
+  }
+  
+  list(
+    `Linear` = fit_logit(make_f(var), data),
+    `Spline 3 knots` = fit_logit(make_f(sprintf("ns(%s, 5)", var)), data),
+    `Spline 4 knots` = fit_logit(make_f(sprintf("ns(%s, 6)", var)), data),
+    `Spline 5 knots` = fit_logit(make_f(sprintf("ns(%s, 7)", var)), data)
+  )
+}
+
+predict_univariate_logit <- function(models, var, var_values, type = "response"){
+  newdata <- data.frame(var = var_values)
+  colnames(newdata) <- var
+  map_dfc(models,
+         function(x) predict(x, newdata = newdata, type = type)) %>%
+  mutate(var = var_values) %>%
+  pivot_longer(cols = names(models),
+               names_to = "Model",
+               values_to = "y")
+}
+
+midpoint <- function(x, digits = 2){
+  lower <- as.numeric(gsub(",.*", "", gsub("\\(|\\[|\\)|\\]", "", x)))
+  upper <- as.numeric(gsub(".*,", "", gsub("\\(|\\[|\\)|\\]", "", x)))
+  return(round(lower+(upper-lower)/2, digits))
+}
+
+bin_y <- function(var, var_values){
+  data <- train_data[, c(var, "died")] %>%
+    filter(!is.na(get(var)))
+  data <- data %>%
+    mutate(x_cat = cut(get(var), breaks = 20),
+           x_midpoint = midpoint(x_cat)) %>%
+    group_by(x_midpoint) %>%
+    summarise(y = mean(died),
+              n = n())
+  colnames(data)[1] <- var
+  return(data)
+}
+
+plot_univariate_logit <- function(models, var, var_values, var_lab = "Variable",
+                                  type = "response", ylab = "Probability of death"){
+  # Plotting data
+  predicted_probs <- predict_univariate_logit(models, var, var_values, type = type)
+  ylab <- switch(type,
+                 "link" = "Log odds",
+                 "response" = "Probability of death",
+                 stop("Type must be 'link' or 'response'")
+  )
+  binned_y <- bin_y(var, var_values)
+  if (type == "link"){
+    binned_y$y <- ifelse(binned_y$y == 0, .001, binned_y$y)
+    binned_y$y <- ifelse(binned_y$y == 1, .99, binned_y$y)
+    binned_y$y <- qlogis(binned_y$y)
+  }
+  
+  # Plotting scales
+  y_min <- min(c(binned_y$y, predicted_probs$y))
+  y_max <- max(c(binned_y$y, predicted_probs$y))
+  size_breaks <- seq(min(binned_y$n), max(binned_y$n),
+                     length.out = 6)
+  
+  # Plot
+  ggplot(predicted_probs,
+       aes(x = var, y = y)) +
+    geom_line() +
+    geom_point(data = binned_y, aes_string(x = var, y = "y", size = "n")) +
+    facet_wrap(~Model, ncol = 2) +
+    xlab(var_lab) +
+    ylab(ylab) +
+    ylim(floor(y_min), ceiling(y_max)) +
+    scale_size(name = "Sample size", range = c(0.3, 3), 
+               breaks = round(size_breaks, 0)) 
+}
+
+make_seq <- function(var){
+  var_min <- min(train_data[[var]], na.rm = TRUE)
+  var_max <- max(train_data[[var]], na.rm = TRUE)
+  seq(var_min, var_max, length.out = 100)
+}
+
+evaluate_univariate_logit <- function(var, print = TRUE){
+  var_values = make_seq(var)
+  var_lab = get_var_labs(var)
+  
+  # Do evaluations
+  fits <- fit_univariate_logit(var, data = train_data)
+  p_link <- plot_univariate_logit(fits, var, var_values, var_lab, type = "link")
+  p_probs <- plot_univariate_logit(fits, var, var_values, var_lab, type = "response")
+  bic <- sapply(fits, BIC)
+  
+  # Print and return
+  if (print){
+    print(p_link)
+    print(p_probs)
+    print(bic)
+  }
+  return(list(fits = fits, p_link = p_link, p_probs = p_probs,
+              bic = bic))
+}
+```
+
+### Demographics
+#### Age 
+```{r, fig.height = 5, fig.width = 7, message = FALSE}
+uv_age <- evaluate_univariate_logit("age")
+```
+
+#### Calendar time
+```{r, fig.height = 5, fig.width = 7, message = FALSE}
+uv_calendar_time <- evaluate_univariate_logit("calendar_time")
+```
+
+### Vitals
+#### Body Mass Index
+
+```{r, fig.height = 5, fig.width = 7, message = FALSE}
+uv_bmi <- evaluate_univariate_logit("bmi")
+```
+
+#### Diastolic blood pressure
+```{r, fig.height = 5, fig.width = 7, message = FALSE}
+uv_dbp <- evaluate_univariate_logit("dbp")
+```
+
+#### Systolic blood pressure
+```{r, fig.height = 5, fig.width = 7, message = FALSE}
+uv_sbp <- evaluate_univariate_logit("sbp")
+```
+
+#### Heart rate
+```{r, fig.height = 5, fig.width = 7, message = FALSE}
+uv_hr <- evaluate_univariate_logit("hr")
+```
+
+#### Respiration rate
+```{r, fig.height = 5, fig.width = 7, message = FALSE}
+uv_resp <- evaluate_univariate_logit("resp")
+```
+
+#### Temperature
+```{r, fig.height = 5, fig.width = 7, message = FALSE}
+uv_temp <- evaluate_univariate_logit("temp")
+```
+
+### Labs
+#### Alanine aminotransferase (U/L)
+```{r, fig.height = 5, fig.width = 7, message = FALSE}
+uv_alt <- evaluate_univariate_logit("alt")
+```
+
+```{r, fig.height = 5, fig.width = 7, message = FALSE}
+uv_alt_t <- evaluate_univariate_logit("alt_t")
+```
+
+#### Alanine aminotransferase (U/L)
+```{r, fig.height = 5, fig.width = 7, message = FALSE}
+uv_ast <- evaluate_univariate_logit("ast")
+```
+
+```{r, fig.height = 5, fig.width = 7, message = FALSE}
+uv_ast_t <- evaluate_univariate_logit("ast_t")
+```
+
+#### C-reactive protein (mg/L)
+```{r, fig.height = 5, fig.width = 7, message = FALSE}
+uv_crp <- evaluate_univariate_logit("crp")
+```
+
+```{r, fig.height = 5, fig.width = 7, message = FALSE}
+uv_crp_t <- evaluate_univariate_logit("crp_t")
+```
+
+#### Creatinine (mg/dL)
+```{r, fig.height = 5, fig.width = 7, message = FALSE}
+uv_creatinine <- evaluate_univariate_logit("creatinine")
+```
+
+```{r, fig.height = 5, fig.width = 7, message = FALSE}
+uv_creatinine_t <- evaluate_univariate_logit("creatinine_t")
+```
+
+#### Ferritin (ng/mL)
+```{r, fig.height = 5, fig.width = 7, message = FALSE}
+uv_ferritin <- evaluate_univariate_logit("ferritin")
+```
+
+```{r, fig.height = 5, fig.width = 7, message = FALSE}
+uv_ferritin_t <- evaluate_univariate_logit("ferritin_t")
+```
+
+#### Fibrin D-Dimer (ng/mL)
+```{r, fig.height = 5, fig.width = 7, message = FALSE}
+uv_d_dimer <- evaluate_univariate_logit("d_dimer")
+```
+
+```{r, fig.height = 5, fig.width = 7, message = FALSE}
+uv_d_dimer_t <- evaluate_univariate_logit("d_dimer_t")
+```
+
+#### Lactate dehydrogenase (U/L)
+```{r, fig.height = 5, fig.width = 7, message = FALSE}
+uv_ldh <- evaluate_univariate_logit("ldh")
+```
+
+```{r, fig.height = 5, fig.width = 7, message = FALSE}
+uv_ldh_t <- evaluate_univariate_logit("ldh_t")
+```
+
+#### Lymphocyte count (10^3/uL)
+```{r, fig.height = 5, fig.width = 7, message = FALSE}
+uv_lymphocyte <- evaluate_univariate_logit("lymphocyte")
+```
+
+```{r, fig.height = 5, fig.width = 7, message = FALSE}
+uv_lymphocyte_t <- evaluate_univariate_logit("lymphocyte_t")
+```
+
+#### Neutrophil count (10^3/uL)
+```{r, fig.height = 5, fig.width = 7, message = FALSE}
+uv_neutrophil <- evaluate_univariate_logit("neutrophil")
+```
+
+```{r, fig.height = 5, fig.width = 7, message = FALSE}
+uv_neutrophil_t <- evaluate_univariate_logit("neutrophil_t")
+```
+
+#### Oxygen saturation (%)
+```{r, fig.height = 5, fig.width = 7, message = FALSE}
+uv_spo2 <- evaluate_univariate_logit("spo2")
+```
+
+#### Procalcitonin (ng/mL)
+```{r, fig.height = 5, fig.width = 7, message = FALSE}
+uv_pct <- evaluate_univariate_logit("pct")
+```
+
+```{r, fig.height = 5, fig.width = 7, message = FALSE}
+uv_pct_t <- evaluate_univariate_logit("pct_t")
+```
+
+#### Troponin I (ng/mL)
+```{r, fig.height = 5, fig.width = 7, message = FALSE}
+uv_tni <- evaluate_univariate_logit("tni")
+```
+
+```{r, fig.height = 5, fig.width = 7, message = FALSE}
+uv_tni_t <- evaluate_univariate_logit("tni_t")
+```
+
+#### Platelet count (10^3/uL)
+```{r, fig.height = 5, fig.width = 7, message = FALSE}
+uv_plt <- evaluate_univariate_logit("plt")
+```
+
+```{r, fig.height = 5, fig.width = 7, message = FALSE}
+uv_plt_t <- evaluate_univariate_logit("plt_t")
+```
+
+#### White blood cell count (10^3/uL)
+```{r, fig.height = 5, fig.width = 7, message = FALSE}
+uv_wbc <- evaluate_univariate_logit("wbc")
+```
+
+```{r, fig.height = 5, fig.width = 7, message = FALSE}
+uv_wbc_t <- evaluate_univariate_logit("wbc_t")
+```
+
+# Data preprocessing 
+## Candidate variables for modeling
+Let's specify variables that will be candidates for our model and used during variable selection. We will combine race and ethnicity into a single variable, but will wait to do this until after multiple imputation (see next section). 
+
+```{r}
+vitals_to_include <- c("bmi", "smoke", "temp", "hr", "resp", "sbp")
+labs_to_include <- c("spo2", "crp_t", "tni_t", "alt_t", "ast_t", "ferritin_t",
+                     "creatinine_t", "ldh_t", "lymphocyte_t", "neutrophil_t",
+                     "plt_t", "wbc_t")
+vars <- vars %>%
+  mutate(include = ifelse(group %in% c("Demographics", "Comorbidities"),
+                          1, 0),
+         include = ifelse(var %in% c(vitals_to_include, labs_to_include),
+                          1, include))
+get_included_vars <- function(){
+  vars[vars$include == 1, ]$var
+}
+
+make_rhs <- function(vars){
+  as.formula(paste0("~", paste(vars, collapse = " + ")))
+}
+candidate_model_rhs <- make_rhs(get_included_vars()) 
+```
+
+## Missing data imputation
+Note that there is no "Other" geographic region as all 9 of the US geographic divisions are included in the data. We will consequently recode this category to missing. 
+
+```{r}
+train_data <- train_data %>%
+  mutate(division = ifelse(division == "Other", NA, division),
+         division = ifelse(division %in% c("East South Central", "Mountain"),
+                           "Other", division))
+```
+
+Let's re-level them so that we have preferred reference categories. 
+
+```{r}
+train_data <- train_data %>% mutate(
+  sex = relevel(factor(sex), ref = "Male"),
+  division = relevel(factor(division), ref = "Pacific"),
+  smoke = relevel(factor(smoke), ref = "Never"),
+  bmi_cat = relevel(factor(bmi_cat), ref = "Normal")
+)
+```
+
+We can now multiply impute data use MICE.
+
+```{r, cache = TRUE}
+# Run MICE algorithm
+mice_out <- train_data %>%
+  select(c(one_of(get_included_vars()), "died")) %>%
+  mutate_if(is.character, as.factor) %>%
+  mice(m = 2, maxit = 5) 
+
+# Append datasets and add outcome
+mi_df <- complete(mice_out, action = "long", include = TRUE) %>%
+  as_tibble() %>%
+  mutate(died = rep(train_data$died, mice_out$m + 1))
+
+# To compare MICE to aregImpute
+# areg_out <-  aregImpute(update.formula(candidate_model_rhs, ~.), 
+#                                        n.impute = 2, data = train_data)
+```
+
+## Imputation diagnostics
+We will compare the distributions of the imputed and observed data.
+
+```{r}
+make_imp_df <- function(object){
+  # Get imputations
+  if (inherits(object, "mids")){
+    imp <- object$imp
+  } else{ # aregImpute
+   imp <- object$imputed 
+   for (i in 1:length(imp)){
+     cat_levels_i <- object$cat.levels[[i]]
+     if (!is.null(cat_levels_i) && !is.null(imp[[i]])){
+       levels <- sort(unique(c(imp[[i]])))
+       imp[[i]] <- apply(imp[[i]], 
+                         2, 
+                         function(x) factor(x, levels = levels,
+                                            labels = cat_levels_i))
+     }
+   }
+  }
+  
+  # Create list of data frames
+  is_numeric <- sapply(imp, function (x) is.numeric(x[, 1]))
+  continuous_df <- vector(mode = "list", length = sum(is_numeric))
+  cat_df <- vector(mode = "list", length = sum(!is_numeric))
+  continuous_cntr <- 1
+  cat_cntr <- 1
+  for (i in 1:length(imp)){
+    if(!is.null(nrow(imp[[i]])) && nrow(imp[[i]]) > 0 ){
+        imp_i_df <- data.frame(var = names(imp)[i],
+                               imp = rep(1:ncol(imp[[i]]), each = nrow(imp[[i]])),
+                               value = c(as.matrix(imp[[i]]))) %>% 
+          as_tibble()
+        
+    } else{
+      imp_i_df <- NULL
+    }
+    if (is_numeric[i]){
+      continuous_df[[continuous_cntr]] <- imp_i_df
+      continuous_cntr <- continuous_cntr + 1
+    } else{
+      cat_df[[cat_cntr]] <- imp_i_df
+      cat_cntr <- cat_cntr + 1
+    }
+  } 
+  
+  # Row bind data frames
+  continuous_df = bind_rows(continuous_df) %>%
+    mutate(obs = "Imputed",
+           varlab = get_var_labs(var)) 
+  
+  cat_df = bind_rows(cat_df) %>%
+    mutate(obs = "Imputed",
+           varlab = get_var_labs(var)) 
+              
+  # Return
+  return(list(continuous = continuous_df,
+              cat = cat_df))
+}
+imp_df <- make_imp_df(mice_out)
+#imp_df <- make_imp_df(areg_out)
+```
+
+```{r, fig.height = 7, fig.width = 8}
+# Plot continuous variables
+## Data for plotting
+obsimp_df_continuous <- bind_rows(
+  imp_df$continuous,
+  continuous_var_df %>%
+    select(var, value, varlab) %>%
+    mutate(imp = 0, obs = "Observed")
+) %>%
+  mutate(imp = ifelse(imp == 0, "Observed", paste0("Imputation ", imp))) %>%
+  filter(var %in% unique(imp_df$continuous$var))
+  
+## Plot
+ggplot(obsimp_df_continuous,
+       aes(x = value, col = imp)) +
+  geom_density(position = "jitter") +
+  facet_wrap(~varlab, scales = "free", ncol = 3) +
+  xlab("") + ylab("Density") +
+  scale_color_discrete(name = "") +
+  theme(legend.position = "bottom")
+```
+
+```{r, fig.height = 6, fig.width = 8}
+# Plot categorical variables
+## Data for plotting
+obsimp_df_cat <- 
+  bind_rows(
+    imp_df$cat %>%
+      group_by(var, varlab, value, imp) %>%
+      summarise(n = n()) %>%
+      group_by(var, varlab, imp) %>%
+      mutate(freq = n / sum(n)),
+    cat_var_df %>%
+      select(var, value, varlab, n, freq) %>%
+      mutate(imp = 0, obs = "Observed")
+  ) %>%
+    mutate(imp = ifelse(imp == 0, "Observed", paste0("Imputation ", imp))) %>%
+    filter(var %in% unique(imp_df$cat$var))
+
+# Plot
+ggplot(obsimp_df_cat, 
+       aes(x = value, y = freq, fill = imp)) +
+  geom_bar(position = "dodge", stat = "identity") +
+  facet_wrap(~varlab, scales = "free_x") +
+  scale_fill_discrete(name = "") +
+  xlab("") +
+  ylab("Proportion") +
+  theme(legend.position = "bottom",
+        axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1))
+```
+
+## Recoding categorical variables
+We create the race/ethnicity variable after imputation of missing values of race and ethnicity. We will also combine the diabetes and hypertension variables
+
+```{r}
+mi_df <- mi_df %>% 
+  add_race_ethnicity() %>%
+  mutate(
+    diab = case_when(
+      diabunc == "Yes" | diabwc == "Yes" ~ "Yes",
+      TRUE ~ "No"
+    ),
+    hyp = case_when(
+      hypc == "Yes" | hypunc == "Yes" ~ "Yes",
+      TRUE ~ "No"
+    )
+)
+prop.table(table(mi_df %>% filter(.imp == 0) %>% pull(diab)))
+prop.table(table(mi_df %>% filter(.imp == 0) %>% pull(hyp)))
+```
+
+Now lets adjust the variables for our models using the combined race and ethnicity category.  
+
+```{r}
+vars <- bind_rows(
+  vars,
+  tibble(var = c("race_ethnicity", "diab", "hyp"),
+         varlab = c("Race/ethnicity", "Diabetes", "Hypertension"),
+         group = c("Demographics", "Comorbidities", "Comorbidities"),
+         include = 1)
+) %>%
+  mutate(include = ifelse(var %in% c("race", "ethnicity", "diabunc", "diabwc", 
+                                     "hypc", "hypunc"),
+                          0, 
+                          include))
+  
+candidate_model_rhs <- make_rhs(get_included_vars())
+```
+
+Finally, we will (i) add the new race/ethnicity variable to the "MICE" object and (ii) create a list of imputed datasets for analysis.
+
+```{r, cache = TRUE}
+mice_out <- as.mids(mi_df)
+mi_list <- mi_df %>% 
+  filter(.imp > 0) %>% 
+  split(list(.$.imp))
+```
+
+# Variable selection
+```{r}
+candidate_model_rhs <- candidate_model_rhs %>%
+  update.formula( ~. + rcs(age, 3) - age +
+                       rcs(calendar_time, 3) - calendar_time +
+                       rcs(bmi, 3) - bmi +
+                       rcs(temp, 3) - temp +
+                       rcs(hr, 3) - hr +
+                       rcs(resp, 3) - resp +
+                       rcs(sbp, 3) - sbp +
+                       rcs(spo2, 3) - spo2 +
+                       rcs(crp_t, 3) - crp_t +
+                       rcs(tni_t, 3) - tni_t +
+                       rcs(alt_t, 3) - alt_t +
+                       rcs(ast_t, 3) - ast_t +
+                       rcs(creatinine_t, 3) - creatinine_t +
+                       rcs(ferritin_t, 3) - ferritin_t +
+                       rcs(ldh_t, 3) - ldh_t,
+                       rcs(lymphocyte_t, 3) - lymphocyte_t +
+                       rcs(neutrophil_t, 3) - neutrophil_t +
+                       rcs(plt_t, 3) - plt_t +
+                       rcs(wbc_t, 3) - wbc_t)
+```
+
+```{r}
+rename_rcs <- function(v){
+  rcs_ind <- grep("rcs", v)
+  v[rcs_ind] <- sub("rcs.*)", "", v[rcs_ind])
+  return(v)
+}
+
+rename_terms <- function(v){
+  v <- gsub(" ", "_", v)
+  v <- gsub("-", "", v)
+  v <- gsub("/", "", v)
+  v <- rename_rcs(v)
+  return(v)
+}
+
+make_x <- function(data){
+  x <- model.matrix(candidate_model_rhs, data)
+  assign <- attr(x, "assign")
+  colnames(x) <- rename_terms(colnames(x))
+  x <- x[, -1]
+  attr(x, "assign") <- assign[-1]
+  return(x)
+}
+
+# List of x and y for each imputed dataset
+x <- mi_list %>% map(make_x)
+y <- mi_list %>% map(function(x) x[["died"]])
+```
+
+```{r}
+terms <- read.csv("risk-factors-terms.csv") %>%
+  left_join(vars[, c("var", "group")], by = "var")
+
+get_term_labs <- function(v, term_name = "term"){
+  terms$termlab[match(v, terms[[term_name]])]
+}
+
+match_terms_to_vars <- function(t){
+  terms$var[match(t, terms$term)]
+}
+```
+
+```{r, cache = TRUE}
+# Number of iterations
+n_rep <- 2
+n_folds <- 5
+n_imputations <- length(mi_list)
+
+# Threshold for variable inclusion
+inclusion_threshold <- 0.9
+
+# Matrix to store inclusion results
+inclusion_sim <- matrix(0,  ncol = ncol(x[[1]]) + 1, 
+                        nrow = n_rep * n_imputations)
+
+# Groups
+groups <- attr(x[[1]], "assign") 
+
+# Convenience function to extract coefficients from Group-Lasso
+coef_cv_oem <- function(object){
+  coef <- object$oem.fit$beta$grp.lasso
+  lse_ind <- which(object$lambda[[1]] == object$lambda.1se.models)
+  return(coef[, lse_ind])
+}
+
+# Variable selection via Group-Lasso
+cntr <- 1
+for (i in 1:n_imputations){
+  for (j in 1:n_rep){
+    
+    # Cross-validation
+    cv_fit <-  cv.oem(x = x[[i]], y = y[[i]], 
+                      penalty = "grp.lasso", 
+                      groups = groups, 
+                      family = "binomial",
+                      type.measure = "deviance"
+                      )
+  
+    # Count nonzero coefficients 
+    inclusion_sim[cntr, which(coef_cv_oem(cv_fit) != 0)] <- 1
+    
+    # Iterate
+    cntr <- cntr + 1
+  } # End repeated CV loop
+} # End imputation loop 
+```
+
+Now, let's check the inclusion probabilities from the above repeated cross-validation steps
+
+```{r, fig.height = 6, fig.width = 7}
+# Percentage of simulations each term is included
+inclusion_sim <- inclusion_sim[, -1] # Remove intercept
+colnames(inclusion_sim) = colnames(x[[1]])
+
+inclusion_summary <- tibble(term = colnames(inclusion_sim), 
+                            prob = apply(inclusion_sim, 2, mean)) 
+model_terms <- inclusion_summary %>%
+  filter(prob >= inclusion_threshold) %>%
+  pull(term)
+
+# Percentage of simulations each variable is included
+inclusion_summary <- inclusion_summary %>%
+  mutate(var = match_terms_to_vars(term)) %>%
+  mutate(varlab = get_var_labs(var)) %>% 
+  distinct(prob, var, varlab)
+
+# Plot
+ggplot(inclusion_summary,
+       aes(x = reorder(varlab, prob), y = prob)) +
+  geom_bar(stat = "identity") + 
+  geom_hline(yintercept = inclusion_threshold, linetype = "dotted", 
+                color = "red", size = 1) +
+  ylab("Probability of inclusion") +
+  coord_flip() +
+  theme(axis.title.y = element_blank())
+```
+
+Correlation heatmap among the selected features
+```{r, fig.width = 10, fig.height = 10}
+abs(cor(x[[1]][, model_terms])) %>%
+  set_colnames(get_term_labs(colnames(.))) %>%
+  set_rownames(get_term_labs(rownames(.))) %>%
+  as.data.frame.table(responseName = "Correlation") %>%
+  ggplot(aes(x = Var1, y = Var2, fill = Correlation)) + 
+  geom_tile() + 
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1),
+        axis.title = element_blank(),
+        legend.position = "bottom")
+```
+
+# Model interpretation
+## Model terms and data
+We include variables in the model based on the group Lasso simulation implemented above. 
+
+```{r}
+vars_to_exclude <- inclusion_summary %>%
+  filter(prob < inclusion_threshold) %>%
+  pull(var)
+
+remove_terms_from_rhs <- function(f, vars_to_exclude){
+  # First convert formula to string separated by +
+  f_string <- Reduce(paste, deparse(f))
+  f_string <- gsub("~", "", f_string)
+  f_string <- gsub(" ", "", f_string)
+  
+  # Then convert string to vector
+  f_vec <-   unlist(strsplit(f_string, "\\+"))
+  pattern_to_exclude <- paste(vars_to_exclude, collapse = "|")
+  f_vec <- f_vec[!grepl(pattern_to_exclude, f_vec)]
+  
+  # Convert string back to formula
+  f_new <- paste0("~", paste(f_vec, collapse = " + "))
+  return(as.formula(f_new))
+}
+
+model_rhs <- remove_terms_from_rhs(candidate_model_rhs, vars_to_exclude)
+```
+
+```{r}
+label(mi_df) <- map(colnames(mi_df), 
+                    function(x) label(mi_df[, x]) <- get_var_labs(x))
+dd <- datadist(mi_df, adjto.cat = "first")
+options(datadist = "dd")
+```
+
+## Fit
+```{r}
+f_logit_all <- update.formula(model_rhs, died ~ .)
+```
+
+```{r}
+# We will fit 4 models:
+lrm_names <- c("Age only",
+                "All demographics",
+                "Demographics and comorbidities",
+                "All variables")
+
+## (1): fit_age: Only includes age
+f_logit_age <- died ~ age 
+lrm_fit_age <- fit.mult.impute(f_logit_age, fitter = lrm, xtrans = mice_out, pr = FALSE,
+                                x = TRUE, y = TRUE)
+
+## (2): fit_d: All demographics including age
+f_logit_d <- update.formula(f_logit_age, ~. + sex + rcs(calendar_time, 3) + 
+                              race_ethnicity + division)
+lrm_fit_d <- fit.mult.impute(f_logit_d, fitter = lrm, xtrans = mice_out, pr = FALSE,
+                             x = TRUE, y = TRUE)
+
+## (3): fit_dc: Demographics and comorbidities
+c_vars <- vars %>%
+  filter(group == "Comorbidities" & include == 1 & !var %in% vars_to_exclude) %>%
+  pull(var)
+f_logit_dc <- update.formula(f_logit_d, 
+                             as.formula(paste0("~.+", paste(c_vars, collapse = "+"))))
+lrm_fit_dc <- fit.mult.impute(f_logit_dc, fitter = lrm, xtrans = mice_out, pr = FALSE,
+                              x = TRUE, y = TRUE)
+
+## (4): fit: The main model including demographics, comorbidities, vitals, and labs
+lrm_fit_all <- fit.mult.impute(f_logit_all, fitter = lrm, xtrans = mice_out, 
+                               pr = FALSE, x = TRUE, y = TRUE)
+
+# Note that we can also estimate the models with stats::glm
+glm_fits_all <- mi_list %>%
+  map(function (x) glm(f_logit_all, data = x, family = "binomial")) 
+glm_fit_all <- glm_fits_all %>% pool()
+```
+
+
+## Collinearity 
+For categorical and continous variables, we use anova model; for categorical and categorical variables, we use Cramer's V; for continous and continous variables, we use spearman correlation.
+
+```{r}
+## from https://stackoverflow.com/questions/52554336/plot-the-equivalent-of-correlation-matrix-for-factors-categorical-data-and-mi
+mixed_assoc <- function(df, cor_method = "spearman", adjust_cramersv_bias = TRUE){
+  df_comb <- expand.grid(names(df), names(df),  stringsAsFactors = F) %>% 
+    set_names("X1", "X2")
+  is_nominal <- function(x) inherits(x, c("factor", "character"))
+  # https://community.rstudio.com/t/why-is-purr-is-numeric-deprecated/3559
+  # https://github.com/r-lib/rlang/issues/781
+  is_numeric <- function(x) { is.integer(x) || is_double(x)}
+  f <- function(x_name, y_name) {
+    x <-  pull(df, x_name)
+    y <-  pull(df, y_name)
+    result <- if(is_nominal(x) && is_nominal(y)){
+        # use bias corrected cramersV as described in https://rdrr.io/cran/rcompanion/man/cramerV.html
+        cv <- cramerV(as.character(x), as.character(y), 
+                      bias.correct = adjust_cramersv_bias)
+        data.frame(x_name, y_name, assoc = cv, type = "cramersV")
+    } else if(is_numeric(x) && is_numeric(y)){
+        correlation <- cor(x, y, method = cor_method, use = "complete.obs")
+        data.frame(x_name, y_name, assoc = correlation, type = "correlation")
+    } else if(is_numeric(x) && is_nominal(y)){
+        # from https://stats.stackexchange.com/questions/119835/correlation-between-a-nominal-iv-and-a-continuous-dv-variable/124618#124618
+        r_squared <- summary(lm(x ~ y))$r.squared
+        data.frame(x_name, y_name, assoc = sqrt(r_squared), type = "anova")
+    } else if(is_nominal(x) && is_numeric(y)){
+        r_squared <- summary(lm(y ~ x))$r.squared
+        data.frame(x_name, y_name, assoc = sqrt(r_squared), type = "anova")
+    } else {
+        warning(paste("unmatched column type combination: ", class(x), class(y)))
+    }
+    # finally add complete obs number and ratio to table
+    result %>% 
+      mutate(
+        complete_obs_pairs = sum(!is.na(x) & !is.na(y)),
+        complete_obs_ratio = complete_obs_pairs/length(x)) %>%
+      rename(x = x_name, y = y_name)
+  }
+  # apply function to each variable combination
+  map2_df(df_comb$X1, df_comb$X2, f)
+}
+```
+
+```{r, cache = TRUE, eval = FALSE}
+# Create correlation matrix of associations
+corr_mat <- mi_df %>% 
+  filter(.imp == 1) %>% 
+  select(any_of(get_included_vars())) %>%
+  mixed_assoc() %>%
+  select(x, y, assoc) %>%
+  pivot_wider(names_from = y, values_from = assoc) %>%
+  column_to_rownames("x") %>%
+  as.matrix
+
+# Make tile plot
+m <- abs(corr_mat)
+heatmap_df <- tibble(row = rownames(m)[row(m)], 
+                     col = colnames(m)[col(m)], corr = c(m)) %>%
+  mutate(row = get_var_labs(row),
+         col = get_var_labs(col))
+heatmap_df %>%
+  ggplot(aes(x = row, y = col, fill = corr)) + 
+  geom_tile() + 
+  scale_fill_continuous("Correlation") +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1),
+        axis.title = element_blank()) 
+```
+
+## Variable importance
+
+```{r}
+# Compute variable important with Wald chi-square
+lrm_anova_all <- anova(lrm_fit_all)
+
+# Plot the result
+lrm_anova_all %>% 
+  as_tibble() %>%
+  mutate(var = gsub(" ", "", rownames(lrm_anova_all)),
+         varlab = get_var_labs(var),
+         value = as.double(`Chi-Square` - `d.f.`)) %>%
+  filter(!var %in% c("TOTAL", "Nonlinear", "TOTALNONLINEAR")) %>%
+
+  ggplot(aes(x = value, y = reorder(varlab, value))) +
+  geom_point() +
+  theme(axis.title.y = element_blank()) +
+  xlab(expression(chi^2-df)) 
+```
+
+## Summary of odds ratios
+### Full model
+```{r}
+lrm_summary_all <- summary(lrm_fit_all)
+
+# Odds ratios
+make_tidy_or <- function(object, model_name = NULL){
+  if (is.null(model_name)) model_name <- "Model"
+  object %>%
+    as.data.frame() %>%
+    as_tibble() %>%
+    mutate(term = rownames(object),
+           High = round(High, 0),
+           Low = round(Low, 0),
+           termlab = get_term_labs(term, "term2"),
+           termlab = ifelse(!is.na(`Diff.`), 
+                            paste0(termlab, " - ", High, ":", Low),
+                            termlab),
+           or = exp(Effect),
+           or_lower = as.double(exp(`Lower 0.95`)),
+           or_upper = exp(`Upper 0.95`)) %>%
+    filter(Type == 1) %>%
+    select(term, termlab, or, or_lower, or_upper) %>%
+    arrange(-or) %>%
+    mutate(model = model_name)
+}
+lrm_or_all <- make_tidy_or(lrm_summary_all, "All variables") 
+
+# Odds ratio plot
+ggplot(lrm_or_all, 
+       aes(x = or, y = reorder(termlab, or))) +
+  geom_point() +
+  geom_errorbarh(aes(xmax = or_upper, xmin = or_lower,
+                     height = .2)) +
+  geom_vline(xintercept = 1, linetype = "dashed", col = "grey") + 
+  theme(axis.title.y = element_blank()) +
+  xlab("Odds ratio")
+```
+
+### Comparison of model with and without vitals + labs
+```{r, fig.width = 7, fig.height = 8}
+lrm_summary_dc <- summary(lrm_fit_dc)
+lrm_or_dc <- make_tidy_or(lrm_summary_dc, "Demographics + comorbidities")
+
+# Odds ratio comparison plot
+lrm_or_comp <- bind_rows(lrm_or_all, lrm_or_dc) %>%
+  filter(term %in% 
+           terms[terms$group %in% c("Demographics", "Comorbidities"), ]$term2) %>%
+  mutate(termlab = factor(termlab),
+         termlab = reorder(termlab, or, function (x) -mean(x)))
+
+ggplot(lrm_or_comp, 
+       aes(x = termlab, y = or, col = model)) +
+  geom_point(position = position_dodge(width = 1)) +
+  geom_errorbar(aes(ymax = or_upper, ymin = or_lower,
+                     width = .2), position = position_dodge(width = 1)) +
+  facet_wrap(~termlab, strip.position = "left", ncol = 1, scales = "free_y") + 
+  geom_hline(yintercept = 1, linetype = "dashed") + 
+  theme(axis.title.y = element_blank()) +
+  scale_color_discrete(name = "Model") +
+  theme(axis.text.y = element_blank(),
+        axis.ticks.y = element_blank(),
+        strip.text.y.left = element_text(hjust = 0, vjust = 1, 
+                                         angle = 0, size = 8),
+        legend.position = "bottom") +
+  ylab("Odds ratio") +
+  coord_flip()
+```
+
+## Predicted log odds
+```{r, fig.height = 14, fig.width = 9}
+lrm_log_odds <- Predict(lrm_fit_all, ref.zero = TRUE)
+
+# Get plotting data
+p_log_odds <- ggplot(lrm_log_odds, sepdiscrete = "list")
+
+# Continuous plot
+log_odds_limit <- max(ceiling(abs(p_log_odds$continuous$data$yhat)))
+log_odds_breaks <- seq(-log_odds_limit, log_odds_limit, 1)
+p_log_odds_continuous <- p_log_odds$continuous$data %>%
+  as_tibble() %>%
+  mutate(varlab = get_var_labs(.predictor.)) %>%
+  ggplot(aes(x = .xx., y = yhat)) +
+  facet_wrap(~varlab, scales = "free_x", ncol = 4) +
+  geom_line() +
+  geom_ribbon(aes(ymin = lower, ymax = upper), alpha = 0.3) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "grey") +
+  ylab("Log odds") +
+  scale_y_continuous(breaks = log_odds_breaks,
+                     limits = c(-log_odds_limit, log_odds_limit)) +
+  theme(axis.title.x = element_blank(), 
+        strip.text = element_text(size = 7))
+
+# Discrete plot
+log_odds_limit <- max(ceiling(abs(p_log_odds$discrete$data$yhat)))
+log_odds_breaks <- seq(-log_odds_limit, log_odds_limit, 1)
+p_log_odds_discrete <- p_log_odds$discrete$data %>%
+  as_tibble() %>%
+  mutate(varlab = get_var_labs(.predictor.)) %>%
+  ggplot(aes(x = yhat, y = .xx.)) +
+  facet_wrap(~varlab, scales = "free_y", ncol = 4) +
+  geom_point(size = .9) +
+  geom_errorbarh(aes(xmin = lower , xmax = upper, height = 0)) +
+  geom_vline(xintercept = 0, linetype = "dashed", color = "grey") +
+  xlab("Log odds") +
+  scale_x_continuous(breaks = log_odds_breaks,
+                     limits = c(-log_odds_limit, log_odds_limit)) +
+  theme(axis.title.y = element_blank(),
+        strip.text = element_text(size = 7))
+
+# Combine plots
+grid.arrange(p_log_odds_discrete, p_log_odds_continuous,
+             heights = c(5, 5))
+```
+
+## Predicted probabilities 
+```{r, fig.height = 4, fig.width = 7}
+# Make newdata
+## Start with a random sample of patients
+n_samples <- 1000
+newdata <- mi_list[[1]] %>% 
+  filter(.imp > 0) %>%
+  sample_n(size = n_samples)
+## Then create one version of the data for each sex, age, and calendar time 
+## combination of interest
+ages_to_vary <- seq(min(train_data$age),  max(train_data$age), 1)
+sex_to_vary <- unique(train_data$sex)
+min_index_date <- min(train_data$index_date)
+calendar_times_to_vary <- c(as.Date("2020-03-01"), 
+                            as.Date("2020-04-01"), 
+                            as.Date("2020-05-01")) - min_index_date
+vars_to_vary <- expand.grid(age = ages_to_vary,
+                            sex = sex_to_vary[!is.na(sex_to_vary)],
+                            calendar_time = as.numeric(calendar_times_to_vary))
+newdata <- newdata %>% 
+  select(-age, -sex, -calendar_time) %>%
+  crossing(vars_to_vary)
+
+# Predict
+lrm_lp <- predict(lrm_fit_all, newdata = data.frame(newdata), se.fit = TRUE)
+newdata <- newdata %>%
+  mutate(lp = lrm_lp$linear.predictors,
+         lp_se = lrm_lp$se.fit,
+         prob = plogis(lp),
+         lower = plogis(lp - qnorm(.975) * lp_se),
+         upper = plogis(lp + qnorm(.975) * lp_se))
+# Mean predictions by variables to vary
+lrm_probs <- newdata %>%
+  group_by(age, sex, calendar_time) %>%
+  summarise(prob = mean(prob),
+            lower = mean(lower),
+            upper = mean(upper)) %>%
+  mutate(date = min_index_date + calendar_time)
+
+# Plot
+ggplot(lrm_probs, aes(x = age, y = prob, color = sex, fill = sex)) +
+  geom_line() +
+  facet_wrap(~date) +
+  # geom_ribbon(aes(ymin = lower, ymax = upper), alpha = 0.1,
+  #             linetype = 0) +
+  geom_line(aes(x = age, y = lower, color = sex),  linetype = "dotted") +
+  geom_line(aes(x = age, y = upper, color = sex),  linetype = "dotted") +
+  xlab("Age") +
+  ylab("Mortality probability") +
+  scale_color_discrete("") +
+  scale_fill_discrete("") +
+  theme(legend.position = "bottom")
+```
+
+# Model validation
+## Optimism-adjusted model performance
+We will start by using bootstrapping to estimate model performance and check for whether our in-sample fits are too optimistic. Specifically, we will use the following algorithm implemented in the `rms` package:
+
+1. Calculate performance from the model fit on the original training sample, denoted as $\theta_{orig}$.
+2. For $b = 1,\ldots,B$:
+    a. Bootstrap (with replacement) from the original training sample.
+    b. Fit the model to the bootstrapped data and estimate model performance, denoted as $\theta_{train}$.
+    c. Use the bootstrap fit to measure model performance on the original training sample, denoted as $\theta_{test}$.
+3. Calculate "optimism" as $O = B^{-1} \sum_{b = 1}^B \theta_{b, train} - \theta_{b, test}$.
+4. Calculate optimism-adjusted performance as $\theta = \theta_{orig} - O$.
+
+A shrinkage factor can also be estimated within each bootstrap sample to gauge the extent of overfitting. This is done by fitting $g(Y) = \gamma_0 + \gamma_1 X\hat{\beta}$ where $X$ and $Y$ are the covariates and outcome, respectively, in the test sample (i.e., in step 2c) and $\hat{\beta}$ is estimating in the training sample (i.e., step 2b). If there is no overfitting, then $\gamma_0 = 0$ and $\gamma_1 = 1$; conversely, if there is overfitting, then $\gamma_1 < 1$ and $\gamma_0 \neq 1$ to compensate.  
+
+
+```{r, cache = TRUE}
+lrm_val_age <- validate(lrm_fit_age)
+lrm_val_d <- validate(lrm_fit_d)
+lrm_val_dc <- validate(lrm_fit_dc)
+lrm_val_all <- validate(lrm_fit_all) 
+```
+
+```{r}
+bind_cindex <- function(object){
+  n_rows <- nrow(object)
+  c_index <- (object["Dxy", 1:3] + 1)/2
+  c_index[4] <- c_index[2] - c_index[3]
+  c_index[5] <- c_index[1] - c_index[4]
+  c_index[6] <- object[1, 6]
+  
+  return(rbind(object, c_index))
+}
+
+make_validation_tbl <- function(object){
+  object %>% 
+    bind_cindex() %>%
+    set_colnames(c("(1) Original", "(2) Bootstrap training", 
+                   "(3) Bootstrap test", "Optimism: (2) - (3)", 
+                   "Original (corrected): (1) - (4)", "N")) %>%
+    kable() %>%
+    kable_styling()
+}
+
+make_validation_tbl(lrm_val_age)
+make_validation_tbl(lrm_val_all)
+```
+
+```{r}
+summarize_performance <- function(objects){
+  metrics <- c("Dxy", "R2", "B")
+  map_df(objects, function (x) x[metrics, "index.orig"],
+                .id = "Model") %>%
+    mutate(`C-index` = (Dxy + 1)/2) %>%
+    rename(`Brier score` = B, `R-Squared` = R2) %>%
+    select(-Dxy) %>%
+    kable(digits = 3) %>%
+    kable_styling()
+}
+
+list(lrm_val_age, lrm_val_d, lrm_val_dc, lrm_val_all) %>%
+  set_names(lrm_names) %>%
+  summarize_performance() 
+```
+
+## Calibration curves
+```{r, cache = TRUE, fig.width = 8, fig.height = 6}
+lrm_cal_age <- calibrate(lrm_fit_age)
+lrm_cal_d <- calibrate(lrm_fit_d)
+lrm_cal_dc <- calibrate(lrm_fit_dc)
+lrm_cal_all <- calibrate(lrm_fit_all)
+lrm_cal_list <- list(lrm_cal_age, lrm_cal_d, lrm_cal_dc, lrm_cal_all)
+names(lrm_cal_list) <- lrm_names
+
+plot_calibration <- function(object){
+  # Make tibble
+  cal_df <- map2(object, names(object), function(x, y){
+    x[, ] %>%
+      as_tibble() %>%
+      mutate(model = y)
+  }) %>% 
+    bind_rows() %>%
+    mutate(model = factor(model, levels = lrm_names))
+  
+  
+  # Plot
+  breaks <- seq(0, 1, .2)
+
+  ggplot() + 
+    geom_line(data = cal_df, mapping = aes(x = predy, y = calibrated.orig, 
+                                           color = "Apparent")) + 
+    geom_line(data = cal_df, mapping = aes(x = predy, y = calibrated.corrected,
+                                           color = "Bias-corrected")) +
+    geom_abline(intercept = 0, slope = 1, linetype = "dashed", color = "grey") +
+    facet_wrap(~model) +
+    scale_x_continuous(breaks = breaks, limits = c(0, 1)) +
+    scale_y_continuous(breaks = breaks, limits = c(0, 1)) +
+    xlab("Predicted probability") +
+    ylab("Actual probability") +
+    scale_colour_manual(name = "",
+                        values = c("Apparent" = "black", 
+                                   "Bias-corrected" = "red")) +
+    theme(legend.position = "bottom") 
+}
+
+plot_calibration(lrm_cal_list)
+```
+
+## Performance on test set
