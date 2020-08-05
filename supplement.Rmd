@@ -169,7 +169,7 @@ cat_vars <- bind_rows(demographic_cat_vars,
 demographic_continuous_vars <- tribble(
   ~var, ~varlab,
   "age", "Age",
-  "calendar_time", "Time since first case"
+  "calendar_time", "Calendar time"
 ) %>%
   mutate(group = "Demographics")
 
@@ -302,7 +302,7 @@ missing_df %>%
 
 ### Covariates
 #### Categorical
-```{r, fig.height = 8, fig.width = 11}
+```{r, fig.height = 9, fig.width = 11}
 cat_var_df <-  train_data %>%
   select(one_of("ptid", cat_vars$var)) %>%
   pivot_longer(cols = cat_vars$var, names_to = "var", values_to = "value") %>%
@@ -373,7 +373,8 @@ plot_hist <- function(data){
        aes(x = value)) +
   geom_histogram(bins = 40, color = "white") +
   facet_wrap(~varlab, scales = "free") + 
-  xlab("") + ylab("Frequency")
+  xlab("") + ylab("Frequency") +
+  theme(strip.text = element_text(size = 7))
 }
 plot_hist(continuous_var_df)
 ```
@@ -1361,7 +1362,7 @@ heatmap_df %>%
 
 ## Variable importance
 
-```{r}
+```{r varImportance}
 # Compute variable important with Wald chi-square
 lrm_anova_all <- anova(lrm_fit_all)
 
@@ -1381,18 +1382,26 @@ lrm_anova_all %>%
 
 ## Summary of odds ratios
 ### Full model
-```{r}
+```{r oddsRatio, fig.height = 6}
 lrm_summary_all <- summary(lrm_fit_all)
 
 # Odds ratios
+format_or_range <- function(x, term){
+  case_when(
+    x < 10 ~ formatC(x, format = "f", digits = 2),
+    term == "temp" ~ formatC(x, format = "f", digits = 1),
+    TRUE ~ formatC(x, format = "f", digits = 0)
+  )
+}
+
 make_tidy_or <- function(object, model_name = NULL){
   if (is.null(model_name)) model_name <- "Model"
   object %>%
     as.data.frame() %>%
     as_tibble() %>%
     mutate(term = rownames(object),
-           High = round(High, 0),
-           Low = round(Low, 0),
+           High = format_or_range(High, term),
+           Low = format_or_range(Low, term),
            termlab = get_term_labs(term, "term2"),
            termlab = ifelse(!is.na(`Diff.`), 
                             paste0(termlab, " - ", High, ":", Low),
@@ -1495,7 +1504,7 @@ grid.arrange(p_log_odds_discrete, p_log_odds_continuous,
 ```
 
 ## Predicted probabilities 
-```{r, fig.height = 4, fig.width = 7}
+```{r predProbs, fig.height = 4, fig.width = 7}
 # Make newdata
 ## Start with a random sample of patients
 n_samples <- 1000
@@ -1613,7 +1622,7 @@ list(lrm_val_age, lrm_val_d, lrm_val_dc, lrm_val_all) %>%
 ```
 
 ## Calibration curves
-```{r, cache = TRUE, fig.width = 8, fig.height = 6}
+```{r calCurve, cache = TRUE, fig.width = 8, fig.height = 6}
 lrm_cal_age <- calibrate(lrm_fit_age)
 lrm_cal_d <- calibrate(lrm_fit_d)
 lrm_cal_dc <- calibrate(lrm_fit_dc)
