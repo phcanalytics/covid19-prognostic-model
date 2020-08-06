@@ -31,15 +31,20 @@ library("splines") # base
 library("tibble") # 3.0.1
 library("tidyr") # 1.1.0
 
+# Namespace clash
+select <- dplyr::select
+
 # Settings
 set.seed(123)
 theme_set(theme_bw())
-
-# Namespace clash
-select <- dplyr::select
+n_imputations <- 2    # Number of multiple imputations with MICE
+n_boot <- 40          # Number of bootstraps with rms validation
+n_rep <- 2            # Number of repeats with grouped lasso
 ```
 
 # Data
+We begin by loading the "training" dataset and restrict to (i) patients age 18 and older and (ii) with an index date more than 2 weeks prior to the data release. Note that we are not unfortunately allowed to publicly share this data.
+
 ## Load
 ```{r}
 train_data <- readRDS("train_data.rds")  %>%
@@ -89,14 +94,6 @@ train_data <- train_data %>%
       bmi >= 18.5 & bmi < 25 ~ "Normal",
       bmi >= 25 & bmi < 30 ~ "Overweight",
       bmi >= 30 ~ "Obese",
-      TRUE ~ NA_character_
-    ),
-    
-    ### Blood pressure
-    bp_cat = case_when(
-      dbp < 80 | sbp < 120 ~ "Normal",
-      dbp < 80 & (sbp >= 120 & sbp < 130) ~ "Elevated",
-      dbp >= 80 | sbp >= 130 ~ "High",
       TRUE ~ NA_character_
     )
   )
@@ -225,8 +222,10 @@ get_var_labs <- function(v){
 ```
 
 # Preliminary data analysis
+Before starting modeling, it's a good idea to carefully inspect the data.
 
 ## Sample size
+
 ```{r}
 train_data %>%
   count(name = "Sample size") %>% 
@@ -237,6 +236,7 @@ train_data %>%
 ```
 
 ## Missing data
+
 ```{r}
 missing_df <- train_data %>%
   select(one_of(vars$var)) %>%
@@ -264,7 +264,6 @@ ylab("Proportion") +
 coord_flip() +
 scale_x_discrete(limits = rev(sort(vars$varlab)))
 ```
-
 
 ### Missing by patient
 ```{r, fig.height = 7, fig.width = 7}
@@ -380,6 +379,8 @@ plot_hist(continuous_var_df)
 ```
 
 ##### Outliers
+Visual inspection of the box plots and histograms suggests that there are significant outliers in the labs. Let's look at how many observations lie above the 99th percentile of the data and the "outer fence" (defined as the 3rd quartile plus 3 time the interquartile range). We will then create new lab variables truncated from above at the outer fence and replot the histograms. 
+
 ```{r}
 outer_fence <- function(v){
   q1 <- quantile(v, .25, na.rm = TRUE)
@@ -422,6 +423,8 @@ for (i in 1:length(lab_vars$var)){
 }
 ```
 
+After truncating the labs, the probability distributions appear more reasonable. 
+
 ```{r, fig.height = 7, fig.width = 10}
 lab_vars_t <- lab_vars %>%
   mutate(var = paste0(var, "_t"))
@@ -453,73 +456,6 @@ for (i in 1:length(x_vars)){
 do.call("grid.arrange", c(p, nrow = 1))
 ```
 
-#### Correlations with race
-##### Race and age
-```{r, fig.height = 5, fig.width = 7}
-ggplot(train_data, 
-       aes(x = race, y = age)) +
-  geom_boxplot(outlier.size = 1) + 
-  xlab("") +
-  ylab(get_var_labs("age")) 
-```
-
-##### Race and comorbidities
-```{r, fig.height = 6, fig.width = 5}
-train_data %>%
-  group_by(race) %>%
-  summarise(`Unweighted` = mean(score),
-            `Weighted` = mean(wscore)) %>%
-  pivot_longer(cols = c("Unweighted", "Weighted"),
-               names_to = "score_type") %>%
-  
-  # Plot
-  ggplot(aes(x = race, y = value)) +
-    geom_bar(stat = "identity") +
-    facet_wrap(~score_type, nrow = 2) +
-    xlab("") +
-    ylab("Mean Charlson score") +
-    scale_fill_discrete("") 
-```
-
-
-```{r, fig.height = 7, fig.width = 10}
-train_data %>%
-  # Tidy table
-  filter(!is.na(race)) %>%
-  select(one_of(c("ptid", "race", comorbidity_vars$var))) %>%
-  pivot_longer(cols = comorbidity_vars$var, names_to = "comorbidity") %>%
-  left_join(comorbidity_vars %>% rename(comorbidity_lab = varlab),
-            by = c("comorbidity" = "var")) %>%
-  group_by(race, comorbidity_lab) %>%
-  summarise(prop = mean(1 * (value == "Yes"))) %>%
-  
-  # Plot
-  ggplot(aes(x = comorbidity_lab, y = prop, fill = race)) +
-    geom_bar(stat = "identity", position = "dodge") +
-    theme(axis.text.x = element_text(angle = 60, hjust = 1)) +
-    xlab("") +
-    ylab("Proportion") +
-    scale_fill_discrete("")
-```
-
-##### Race and region
-```{r, fig.height = 8, fig.width = 8}
-train_data %>%
-  # Tidy table
-  group_by(race, division) %>%
-  tally() %>%
-  group_by(race) %>%
-  mutate(prop = n/sum(n)) %>%
-  
-  # Plot
-  ggplot(aes(x = division, y = prop)) +
-    geom_bar(stat = "identity") +
-    facet_wrap(~race) +
-    theme(axis.text.x = element_text(angle = 60, hjust = 1)) +
-    xlab("") +
-    ylab("Proportion") 
-```
-
 ### Outcomes
 ```{r, fig.height = 4, fig.width = 6}
 train_data %>%
@@ -539,7 +475,7 @@ train_data %>%
 train_data %>%
   mutate(months_to_death = death_month - index_month) %>%
   filter(!is.na(months_to_death)) %>%
-  group_by( months_to_death) %>%
+  group_by(months_to_death) %>%
   tally() %>%
   
   # Plot
@@ -555,8 +491,9 @@ train_data <- train_data %>%
   add_race_ethnicity()
 ```
 
-
 ## Transformations of continuous variables
+The functional form of the relationship between mortality and the continuous variables is assessed using a series of univariate fits. We mainly rely on visual inspection of the graphs but also report the Bayesian information criterion (BIC).
+
 ```{r}
 fit_univariate_logit <- function(var, data){
   make_f <- function(rhs){
@@ -884,7 +821,7 @@ We can now multiply impute data use MICE.
 mice_out <- train_data %>%
   select(c(one_of(get_included_vars()), "died")) %>%
   mutate_if(is.character, as.factor) %>%
-  mice(m = 2, maxit = 5) 
+  mice(m = n_imputations, maxit = 5) 
 
 # Append datasets and add outcome
 mi_df <- complete(mice_out, action = "long", include = TRUE) %>%
@@ -897,7 +834,7 @@ mi_df <- complete(mice_out, action = "long", include = TRUE) %>%
 ```
 
 ## Imputation diagnostics
-We will compare the distributions of the imputed and observed data.
+The distributions of the imputed and observed data are compared as a diagnostic for the imputation. They look pretty similar suggesting that there is nothing terribly wrong with the imputation.
 
 ```{r}
 make_imp_df <- function(object){
@@ -1012,7 +949,7 @@ ggplot(obsimp_df_cat,
 ```
 
 ## Recoding categorical variables
-We create the race/ethnicity variable after imputation of missing values of race and ethnicity. We will also combine the diabetes and hypertension variables
+We create the race/ethnicity variable after imputation of missing values of race and ethnicity. We will also combine the diabetes and hypertension variables.
 
 ```{r}
 mi_df <- mi_df %>% 
@@ -1059,6 +996,8 @@ mi_list <- mi_df %>%
 ```
 
 # Variable selection
+The continuous variables in our model are transformed using restricted cubic splines with 3 knots.
+
 ```{r}
 candidate_model_rhs <- candidate_model_rhs %>%
   update.formula( ~. + rcs(age, 3) - age +
@@ -1081,6 +1020,8 @@ candidate_model_rhs <- candidate_model_rhs %>%
                        rcs(plt_t, 3) - plt_t +
                        rcs(wbc_t, 3) - wbc_t)
 ```
+
+With `oem` we need to create an `x` matrix since there is no formula interface.
 
 ```{r}
 rename_rcs <- function(v){
@@ -1111,6 +1052,8 @@ x <- mi_list %>% map(make_x)
 y <- mi_list %>% map(function(x) x[["died"]])
 ```
 
+To make the graphs look nice, we will import labels for the model terms. 
+
 ```{r}
 terms <- read.csv("risk-factors-terms.csv") %>%
   left_join(vars[, c("var", "group")], by = "var")
@@ -1124,11 +1067,11 @@ match_terms_to_vars <- function(t){
 }
 ```
 
+Finally, we run the grouped lasso.
+
 ```{r, cache = TRUE}
-# Number of iterations
-n_rep <- 2
-n_folds <- 5
-n_imputations <- length(mi_list)
+# Number of folds for cross-validation
+n_folds <- 10
 
 # Threshold for variable inclusion
 inclusion_threshold <- 0.9
@@ -1157,7 +1100,8 @@ for (i in 1:n_imputations){
                       penalty = "grp.lasso", 
                       groups = groups, 
                       family = "binomial",
-                      type.measure = "deviance"
+                      type.measure = "deviance",
+                      nfolds = n_folds
                       )
   
     # Count nonzero coefficients 
@@ -1169,7 +1113,7 @@ for (i in 1:n_imputations){
 } # End imputation loop 
 ```
 
-Now, let's check the inclusion probabilities from the above repeated cross-validation steps
+Let's check the inclusion probabilities from the above repeated cross-validation steps.
 
 ```{r, fig.height = 6, fig.width = 7}
 # Percentage of simulations each term is included
@@ -1199,22 +1143,9 @@ ggplot(inclusion_summary,
   theme(axis.title.y = element_blank())
 ```
 
-Correlation heatmap among the selected features
-```{r, fig.width = 10, fig.height = 10}
-abs(cor(x[[1]][, model_terms])) %>%
-  set_colnames(get_term_labs(colnames(.))) %>%
-  set_rownames(get_term_labs(rownames(.))) %>%
-  as.data.frame.table(responseName = "Correlation") %>%
-  ggplot(aes(x = Var1, y = Var2, fill = Correlation)) + 
-  geom_tile() + 
-  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1),
-        axis.title = element_blank(),
-        legend.position = "bottom")
-```
-
 # Model interpretation
 ## Model terms and data
-We include variables in the model based on the group Lasso simulation implemented above. 
+Variables are included in the model based on the group Lasso simulation implemented above. 
 
 ```{r}
 vars_to_exclude <- inclusion_summary %>%
@@ -1248,12 +1179,14 @@ options(datadist = "dd")
 ```
 
 ## Fit
+As described in the paper, four models are fit that include the following predictors: (i) age only, (ii) all demographics (and calendar time), and (iii) demographics (and calendar time) and comorbidities, and (iv) all variables selected by the grouped lasso. 
+
 ```{r}
 f_logit_all <- update.formula(model_rhs, died ~ .)
 ```
 
 ```{r}
-# We will fit 4 models:
+# The four models
 lrm_names <- c("Age only",
                 "All demographics",
                 "Demographics and comorbidities",
@@ -1289,9 +1222,8 @@ glm_fits_all <- mi_list %>%
 glm_fit_all <- glm_fits_all %>% pool()
 ```
 
-
 ## Collinearity 
-For categorical and continous variables, we use anova model; for categorical and categorical variables, we use Cramer's V; for continous and continous variables, we use spearman correlation.
+Let's examine the extent to which our predictors are collinear: for categorical and continous variables, we use an anova model; for categorical and categorical variables, we use Cramer's V; and for continous and continous variables, we use spearman correlation. (Note that this takes a long time to run and could probablty be made more efficient.)
 
 ```{r}
 ## from https://stackoverflow.com/questions/52554336/plot-the-equivalent-of-correlation-matrix-for-factors-categorical-data-and-mi
@@ -1361,6 +1293,7 @@ heatmap_df %>%
 ```
 
 ## Variable importance
+Variable importance is assessed with a Wald test using the `rms::anova()`.
 
 ```{r varImportance}
 # Compute variable important with Wald chi-square
@@ -1381,6 +1314,8 @@ lrm_anova_all %>%
 ```
 
 ## Summary of odds ratios
+The model is summarized with odds ratios using `rms::summary()`. We will start by assessing the full model. Next, since labs and vitals may themselves be "caused" by comorbidities, we will see how the odds ratios for the comorbidities change after dropping labs and vitals from the model. 
+
 ### Full model
 ```{r oddsRatio, fig.height = 6}
 lrm_summary_all <- summary(lrm_fit_all)
@@ -1428,6 +1363,7 @@ ggplot(lrm_or_all,
 ```
 
 ### Comparison of model with and without vitals + labs
+
 ```{r, fig.width = 7, fig.height = 8}
 lrm_summary_dc <- summary(lrm_fit_dc)
 lrm_or_dc <- make_tidy_or(lrm_summary_dc, "Demographics + comorbidities")
@@ -1458,6 +1394,23 @@ ggplot(lrm_or_comp,
 ```
 
 ## Predicted log odds
+One limitation of the odds ratio plots is that it is hard to examine the potentially non-linear relationships between mortality and the continuous variable. The `rms::Predict()` function is especially helpul in this regard. We use it to vary all of the predictors and plot predicted log odds across the different values of each predictor. 
+
+Each prediction is made with all other variables at their "Adjust to" value as specified with `datadist()` above.
+
+```{r}
+t(dd$limits) %>%
+  as_tibble() %>%
+  mutate(Variable = get_var_labs(colnames(dd$limits))) %>%
+  relocate(Variable, .before = "Low:effect") %>%
+  filter(!is.na(Variable)) %>%
+  arrange(Variable) %>%
+  kable() %>%
+  kable_styling()
+```
+
+Let's make the predictions.
+
 ```{r, fig.height = 14, fig.width = 9}
 lrm_log_odds <- Predict(lrm_fit_all, ref.zero = TRUE)
 
@@ -1504,6 +1457,8 @@ grid.arrange(p_log_odds_discrete, p_log_odds_continuous,
 ```
 
 ## Predicted probabilities 
+The predicted log odds plot is a nice way to summarize non-linear effects, but it's not the ultimate quantity of interest. We really care about predicted probabilities. One quantity we are interested in is predicted mortality as a function of age, sex, and calendar time. But to compute this quantity we need to set all covariates in the model to certain values. Rather that choosing certain values (i.e., creating a representative patient), we opted to make predictions over a representative sample and average predictions across the sample. 
+
 ```{r predProbs, fig.height = 4, fig.width = 7}
 # Make newdata
 ## Start with a random sample of patients
@@ -1534,6 +1489,7 @@ newdata <- newdata %>%
          prob = plogis(lp),
          lower = plogis(lp - qnorm(.975) * lp_se),
          upper = plogis(lp + qnorm(.975) * lp_se))
+
 # Mean predictions by variables to vary
 lrm_probs <- newdata %>%
   group_by(age, sex, calendar_time) %>%
@@ -1573,10 +1529,10 @@ A shrinkage factor can also be estimated within each bootstrap sample to gauge t
 
 
 ```{r, cache = TRUE}
-lrm_val_age <- validate(lrm_fit_age)
-lrm_val_d <- validate(lrm_fit_d)
-lrm_val_dc <- validate(lrm_fit_dc)
-lrm_val_all <- validate(lrm_fit_all) 
+lrm_val_age <- validate(lrm_fit_age, B = n_boot)
+lrm_val_d <- validate(lrm_fit_d, B = n_boot)
+lrm_val_dc <- validate(lrm_fit_dc, B = n_boot)
+lrm_val_all <- validate(lrm_fit_all, B = n_boot) 
 ```
 
 ```{r}
@@ -1623,10 +1579,10 @@ list(lrm_val_age, lrm_val_d, lrm_val_dc, lrm_val_all) %>%
 
 ## Calibration curves
 ```{r calCurve, cache = TRUE, fig.width = 8, fig.height = 6}
-lrm_cal_age <- calibrate(lrm_fit_age)
-lrm_cal_d <- calibrate(lrm_fit_d)
-lrm_cal_dc <- calibrate(lrm_fit_dc)
-lrm_cal_all <- calibrate(lrm_fit_all)
+lrm_cal_age <- calibrate(lrm_fit_age, B = n_boot)
+lrm_cal_d <- calibrate(lrm_fit_d, B = n_boot)
+lrm_cal_dc <- calibrate(lrm_fit_dc, B = n_boot)
+lrm_cal_all <- calibrate(lrm_fit_all, B = n_boot)
 lrm_cal_list <- list(lrm_cal_age, lrm_cal_d, lrm_cal_dc, lrm_cal_all)
 names(lrm_cal_list) <- lrm_names
 
