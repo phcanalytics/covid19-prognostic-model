@@ -122,7 +122,8 @@ demographic_cat_vars <- tribble(
   "sex", "Sex",
   "race", "Race",
   "ethnicity", "Ethnicity",
-  "division", "Geographic division"
+  "division", "Geographic division",
+  "smoke", "Smoking",
 ) %>% 
   mutate(group = "Demographics")
 
@@ -153,7 +154,6 @@ comorbidity_vars <- tribble(
 
 vital_cat_vars <- tribble(
   ~var, ~varlab,
-  "smoke", "Smoking",
   "bmi_cat", "Body Mass Index (BMI)",
 ) %>%
   mutate(group = "Vitals")
@@ -774,7 +774,7 @@ uv_wbc_t <- evaluate_univariate_logit("wbc_t")
 Let's specify variables that will be candidates for our model and used during variable selection. We will combine race and ethnicity into a single variable, but will wait to do this until after multiple imputation (see next section). 
 
 ```{r}
-vitals_to_include <- c("bmi", "smoke", "temp", "hr", "resp", "sbp")
+vitals_to_include <- c("bmi", "temp", "hr", "resp", "sbp")
 labs_to_include <- c("spo2", "crp_t", "tni_t", "alt_t", "ast_t", "ferritin_t",
                      "creatinine_t", "ldh_t", "lymphocyte_t", "neutrophil_t",
                      "plt_t", "wbc_t")
