@@ -76,7 +76,7 @@ train_data <- train_data %>%
   mutate_at(
     c("ami", "chf", "pvd", "cevd", "dementia", "copd", "rheumd", "pud",
       "mld", "diabunc", "diabwc", "hp", "rend", "canc", "msld", "metacanc",
-      "aids", "hypc", "hypunc", "asthma"),
+      "aids", "hypc", "hypunc"),
     function (x) ifelse(x == 1, "Yes", "No")
   ) 
 
@@ -151,7 +151,7 @@ comorbidity_vars <- tribble(
   "pvd", "Peripheral vascular disease",
   "cevd", "Cerebrovascular disease",
   "dementia", "Dementia",
-  "copd", "COPD",
+  "copd", "Chronic pulmonary disease",
   "rheumd", "Rheumatoid disease",
   "pud", "Peptic ulcer disease",
   "mld", "Mild liver disease",
@@ -165,7 +165,6 @@ comorbidity_vars <- tribble(
   "aids", "AIDS/HIV",
   "hypunc", "Hypertension (no complications)",
   "hypc", "Hypertension (complications)",
-  "asthma", "Asthma",
   "diab", "Diabetes", # Combines diabunc and diabwc
   "hyp", "Hypertension", # Combine hypunc and hypc
 ) %>%
@@ -314,7 +313,7 @@ missing_df %>%
 
 ### Covariates
 #### Categorical
-```{r, fig.height = 9, fig.width = 11}
+```{r, fig.height = 10, fig.width = 11}
 cat_var_df <-  train_data %>%
   select(one_of("ptid", cat_vars$var)) %>%
   pivot_longer(cols = cat_vars$var, names_to = "var", values_to = "value") %>%
@@ -336,14 +335,14 @@ ggplot(cat_var_df,
        aes(x = freq, y = value)) +
   geom_point() + 
   geom_text(aes(label = formatC(freq, format = "f", digits = 2)),
-            nudge_x = cat_var_df$nudge_x, size = 3.75) +
+            nudge_x = cat_var_df$nudge_x, size = 3.5) +
   facet_wrap(~varlab, scales = "free_y", ncol = 4) +
   xlim(0, 1) +
   xlab("Proportion") +
   ylab("") +
   theme(axis.text.x = element_text(size = 10),
         axis.text.y = element_text(size = 10),
-        strip.text.x = element_text(size = 9))
+        strip.text.x = element_text(size = 7))
 ```
 
 #### Continuous
@@ -384,7 +383,7 @@ plot_hist <- function(data){
   ggplot(data,
        aes(x = value)) +
   geom_histogram(bins = 40, color = "white") +
-  facet_wrap(~varlab, scales = "free") + 
+  facet_wrap(~varlab, scales = "free", ncol = 4) + 
   xlab("") + ylab("Frequency") +
   theme(strip.text = element_text(size = 7))
 }
