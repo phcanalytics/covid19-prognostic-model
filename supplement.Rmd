@@ -28,6 +28,7 @@ library("purrr") # 0.3.4
 library("rcompanion") # 2.3.25
 library("rms") # 6.0.1
 library("splines") # base
+library("tableone") # 12.0.0
 library("tibble") # 3.0.1
 library("tidyr") # 1.1.0
 
@@ -80,6 +81,22 @@ train_data <- train_data %>%
   ) 
 
 # Create "derived" variables
+
+## Function to add race/ethnicity variable to dataset (done after separately 
+## imputing missing race + ethnicity information)
+add_race_ethnicity <- function(data){
+  data %>% mutate(
+    race_ethnicity = case_when(
+      race == "Caucasian" & ethnicity != "Hispanic" ~ "Non-Hispanic white",
+      race == "African American" & ethnicity != "Hispanic" ~ "Non-Hispanic black",
+      race == "Asian" & ethnicity != "Hispanic" ~ "Asian",
+      is.na(race) | is.na(ethnicity) ~ NA_character_,
+      TRUE ~ "Hispanic"
+    ),
+    race_ethnicity = relevel(factor(race_ethnicity), ref = "Non-Hispanic white")
+  )
+}
+
 train_data <- train_data %>%
   mutate(
     calendar_time = as.numeric(index_date - min(index_date)),
@@ -87,30 +104,29 @@ train_data <- train_data %>%
     death_month = as.integer(format(date_of_death,"%m")),
     os_days = pmax(0, date_of_death - index_date),
     
-    ## Categorize continuous vitals + labs
-    ### BMI
+    ## Categorize BMI
     bmi_cat = case_when(
       bmi < 18.5 ~ "Underweight",
       bmi >= 18.5 & bmi < 25 ~ "Normal",
       bmi >= 25 & bmi < 30 ~ "Overweight",
       bmi >= 30 ~ "Obese",
       TRUE ~ NA_character_
+    ),
+    
+    ## Combine comorbidities
+    diab = case_when(
+      diabunc == "Yes" | diabwc == "Yes" ~ "Yes",
+      TRUE ~ "No"
+    ),
+    hyp = case_when(
+      hypc == "Yes" | hypunc == "Yes" ~ "Yes",
+      TRUE ~ "No"
     )
-  )
-
-# Function to add race/ethnicity variable to dataset (done after separately 
-# imputing missing race + ethnicity information)
-add_race_ethnicity <- function(data){
- data %>% mutate(
-   race_ethnicity = case_when(
-    race == "Caucasian" & ethnicity != "Hispanic" ~ "Non-Hispanic white",
-    race == "African American" & ethnicity != "Hispanic" ~ "Non-Hispanic black",
-    race == "Asian" & ethnicity != "Hispanic" ~ "Asian",
-    TRUE ~ "Hispanic"
-  ),
-  race_ethnicity = relevel(factor(race_ethnicity), ref = "Non-Hispanic white")
- )
-}
+  ) %>%
+  
+  ## Create race/ethnicity variable
+  ## Later to be created after imputation from imputed race + ethnicity
+  add_race_ethnicity() 
 ```
 
 ## Label
@@ -124,6 +140,7 @@ demographic_cat_vars <- tribble(
   "ethnicity", "Ethnicity",
   "division", "Geographic division",
   "smoke", "Smoking",
+  "race_ethnicity", 'Race/Ethnicity'
 ) %>% 
   mutate(group = "Demographics")
 
@@ -148,7 +165,9 @@ comorbidity_vars <- tribble(
   "aids", "AIDS/HIV",
   "hypunc", "Hypertension (no complications)",
   "hypc", "Hypertension (complications)",
-  "asthma", "Asthma"
+  "asthma", "Asthma",
+  "diab", "Diabetes", # Combines diabunc and diabwc
+  "hyp", "Hypertension", # Combine hypunc and hypc
 ) %>%
   mutate(group = "Comorbidities")
 
@@ -204,12 +223,6 @@ continuous_vars <- bind_rows(
   demographic_continuous_vars,
   vital_continuous_vars,
   lab_vars
-)
-
-# Binary outcomes
-binary_outcomes <- tribble(
-  ~var, ~varlab,
-  "died", "Died" 
 )
 
 # All variables
@@ -486,9 +499,56 @@ train_data %>%
 ```
 
 ## Table 1
-```{r}
-train_data <- train_data %>%
-  add_race_ethnicity()
+```{r tableOne}
+# Select variables for table 1
+remove_varnames <- c("race", "ethnicity", "bmi_cat", "hypunc", "hypc", 
+                     "diabunc", "diabwc")
+
+all_varnames <- bind_rows(
+  demographic_cat_vars,
+  demographic_continuous_vars,
+  comorbidity_vars,
+  vital_cat_vars,
+  vital_continuous_vars,
+  lab_vars
+) %>%
+  filter(!var %in% remove_varnames) %>%
+  pull(var)
+
+categorical_varnames <- bind_rows(
+  demographic_cat_vars,
+  comorbidity_vars,
+  vital_cat_vars
+) %>%
+  filter(!var %in% remove_varnames) %>%
+  pull(var)
+
+non_normal_varnames <- c(
+  demographic_continuous_vars$var,
+  vital_continuous_vars$var,
+  lab_vars$var
+)
+  
+## Create a TableOne object
+table1 <- train_data %>%
+  select(one_of(all_varnames, "died")) %>%
+  rename_with(get_var_labs, .cols = all_of(all_varnames)) %>%
+  rename(Survivor = died) %>%
+  CreateTableOne(vars = get_var_labs(all_varnames), 
+                 factorVars = get_var_labs(categorical_varnames), 
+                 strata = "Survivor",  addOverall = TRUE, 
+                 data = .)
+
+## Print table 1
+print(table1, nonnormal = get_var_labs(non_normal_varnames),  
+      cramVars = c("Sex"),
+      contDigits = 1, missing = TRUE, printToggle = FALSE) %>%
+  set_colnames(c("Overall", "Survivor", "Non-survivor",
+                "p", "Test", "Missing")) %>%
+  kable() %>%
+  kable_styling()
+
+#summary(table1)
 ```
 
 ## Transformations of continuous variables
@@ -774,15 +834,22 @@ uv_wbc_t <- evaluate_univariate_logit("wbc_t")
 Let's specify variables that will be candidates for our model and used during variable selection. We will combine race and ethnicity into a single variable, but will wait to do this until after multiple imputation (see next section). 
 
 ```{r}
+demographics_to_include <- c("age", "sex", "race", "ethnicity", "division",
+                             "smoke", "calendar_time")
+comorbidities_to_include <- comorbidity_vars %>%
+  filter(!var %in% c("diabunc", "diabwc", "hypunc", "hypc")) %>%
+  pull(var) %>%
+  c("diab", "hyp")
 vitals_to_include <- c("bmi", "temp", "hr", "resp", "sbp")
 labs_to_include <- c("spo2", "crp_t", "tni_t", "alt_t", "ast_t", "ferritin_t",
                      "creatinine_t", "ldh_t", "lymphocyte_t", "neutrophil_t",
                      "plt_t", "wbc_t")
 vars <- vars %>%
-  mutate(include = ifelse(group %in% c("Demographics", "Comorbidities"),
-                          1, 0),
-         include = ifelse(var %in% c(vitals_to_include, labs_to_include),
-                          1, include))
+  mutate(include = ifelse(var %in% c(demographics_to_include, 
+                                     comorbidities_to_include,
+                                     vitals_to_include, 
+                                     labs_to_include),
+                          1, 0))
 get_included_vars <- function(){
   vars[vars$include == 1, ]$var
 }
@@ -953,35 +1020,23 @@ We create the race/ethnicity variable after imputation of missing values of race
 
 ```{r}
 mi_df <- mi_df %>% 
-  add_race_ethnicity() %>%
-  mutate(
-    diab = case_when(
-      diabunc == "Yes" | diabwc == "Yes" ~ "Yes",
-      TRUE ~ "No"
-    ),
-    hyp = case_when(
-      hypc == "Yes" | hypunc == "Yes" ~ "Yes",
-      TRUE ~ "No"
-    )
-)
+  add_race_ethnicity() 
+
 prop.table(table(mi_df %>% filter(.imp == 0) %>% pull(diab)))
 prop.table(table(mi_df %>% filter(.imp == 0) %>% pull(hyp)))
 ```
 
-Now lets adjust the variables for our models using the combined race and ethnicity category.  
+Now lets use the combined race and ethnicity category in our model.  
 
 ```{r}
-vars <- bind_rows(
-  vars,
-  tibble(var = c("race_ethnicity", "diab", "hyp"),
-         varlab = c("Race/ethnicity", "Diabetes", "Hypertension"),
-         group = c("Demographics", "Comorbidities", "Comorbidities"),
-         include = 1)
-) %>%
-  mutate(include = ifelse(var %in% c("race", "ethnicity", "diabunc", "diabwc", 
-                                     "hypc", "hypunc"),
-                          0, 
-                          include))
+vars <- vars %>%
+  mutate(include = case_when(
+      var == "race_ethnicity" ~ 1,
+      var == "race" ~ 0,
+      var == "ethnicity" ~ 0,
+      TRUE ~ include
+    )
+  )
   
 candidate_model_rhs <- make_rhs(get_included_vars())
 ```
