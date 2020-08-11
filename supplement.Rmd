@@ -16,6 +16,7 @@ output:
 library("corrr") # 0.4.2
 library("cowplot") # 1.0.0
 library("dplyr") # 1.0.0
+library("DT") #0.14
 library("ggplot2") # 3.3.1
 library("oem") # 2.0.10
 library("gridExtra") # 2.3
@@ -39,7 +40,8 @@ select <- dplyr::select
 set.seed(123)
 theme_set(theme_bw())
 n_imputations <- 2    # Number of multiple imputations with MICE
-n_boot <- 40          # Number of bootstraps with rms validation
+n_boot_val <- 40      # Number of bootstraps with rms validation and calibration
+n_boot_probs <- 100   # Number of bootstraps for computing predicted probabilitiy CIs
 n_rep <- 2            # Number of repeats with grouped lasso
 ```
 
@@ -1276,6 +1278,11 @@ glm_fits_all <- mi_list %>%
 glm_fit_all <- glm_fits_all %>% pool()
 ```
 
+We will print the results of the full model for the interested reader
+```{r}
+lrm_fit_all
+```
+
 ## Collinearity 
 Let's examine the extent to which our predictors are collinear: for categorical and continous variables, we use an anova model; for categorical and categorical variables, we use Cramer's V; and for continous and continous variables, we use spearman correlation. (Note that this takes a long time to run and could probablty be made more efficient.)
 
@@ -1511,60 +1518,161 @@ grid.arrange(p_log_odds_discrete, p_log_odds_continuous,
 ```
 
 ## Predicted probabilities 
-The predicted log odds plot is a nice way to summarize non-linear effects, but it's not the ultimate quantity of interest. We really care about predicted probabilities. One quantity we are interested in is predicted mortality as a function of age, sex, and calendar time. But to compute this quantity we need to set all covariates in the model to certain values. Rather that choosing certain values (i.e., creating a representative patient), we opted to make predictions over a representative sample and average predictions across the sample. 
+The predicted log odds plot is a nice way to summarize non-linear effects, but it's not the ultimate quantity of interest. We really care about predicted probabilities. But to compute a predicted probability we need to set all covariates in the model to certain values. Rather that choosing specific values (i.e., creating a representative patient), we will make predictions over a representative sample and average predictions across the sample. 
 
-```{r predProbs, fig.height = 4, fig.width = 7}
+```{r}
 # Make newdata
 ## Start with a random sample of patients
 n_samples <- 1000
-newdata <- mi_list[[1]] %>% 
+train_sample <- mi_list[[1]] %>% 
   filter(.imp > 0) %>%
   sample_n(size = n_samples)
-## Then create one version of the data for each sex, age, and calendar time 
-## combination of interest
-ages_to_vary <- seq(min(train_data$age),  max(train_data$age), 1)
-sex_to_vary <- unique(train_data$sex)
+```
+
+We will write a general function to predict mortality as a function of (i) our fitted model, (ii) the representative sample, and (iii) the variables that we are varying.
+
+```{r}
+expand_newdata <- function(data, vars_to_vary){
+  varnames_to_vary <- names(vars_to_vary)
+  expanded_vars_to_vary <- expand.grid(vars_to_vary)
+  data %>% 
+    select(-all_of(varnames_to_vary)) %>%
+    crossing(expanded_vars_to_vary)
+}
+
+predict_mortality <- function(fit, newdata, vars_to_vary){
+  expanded_newdata <- expand_newdata(newdata, vars_to_vary)
+  fit_probs <- predict(fit, newdata = data.frame(expanded_newdata), 
+                       type = "fitted", se.fit = FALSE)
+  
+  # Average predictions for variables to vary
+  expanded_newdata %>%
+    mutate(prob = fit_probs) %>%
+    group_by(across(all_of(names(vars_to_vary)))) %>%
+    summarise(prob = mean(prob))
+}
+
+predict_mortality_boot <- function(fit, newdata, vars_to_vary, B = 100){
+  n_obs <- nrow(newdata)
+  boot_probs <- vector(mode = "list", length = B)
+  for (b in 1:B){
+    indices <- sample(x = 1:n_obs, size = n_obs, replace = TRUE) 
+    newdata_boot <- newdata[indices, ]
+    boot_probs[[b]] <- predict_mortality(fit, newdata_boot, vars_to_vary)
+    boot_probs[[b]][, "b"] <- b 
+  }
+  return(boot_probs %>% bind_rows())
+}
+```
+
+### Varying age
+```{r}
+ages_to_vary  <- seq(min(train_data$age),  max(train_data$age), 1)
+
+probs_age <- predict_mortality(lrm_fit_all, newdata = train_sample, 
+                               vars_to_vary = list(age = ages_to_vary)) %>%
+  rename(Age = age, `Mortality probability` = prob)
+```
+
+```{r}
+# Table using DT package
+datatable(probs_age, 
+          rownames = FALSE,
+          options = list(pageLength = 20)) %>%
+  formatRound("Mortality probability", 4)
+```
+
+```{r}
+ggplot(probs_age, aes(x = `Age`, y = `Mortality probability`)) +
+  geom_line() 
+```
+
+### Varying calendar time
+```{r}
 min_index_date <- min(train_data$index_date)
 calendar_times_to_vary <- c(as.Date("2020-03-01"), 
                             as.Date("2020-04-01"), 
-                            as.Date("2020-05-01")) - min_index_date
-vars_to_vary <- expand.grid(age = ages_to_vary,
-                            sex = sex_to_vary[!is.na(sex_to_vary)],
-                            calendar_time = as.numeric(calendar_times_to_vary))
-newdata <- newdata %>% 
-  select(-age, -sex, -calendar_time) %>%
-  crossing(vars_to_vary)
+                            as.Date("2020-05-01")) - min_index_date 
+calendar_times_to_vary <- as.numeric(calendar_times_to_vary)
 
-# Predict
-lrm_lp <- predict(lrm_fit_all, newdata = data.frame(newdata), se.fit = TRUE)
-newdata <- newdata %>%
-  mutate(lp = lrm_lp$linear.predictors,
-         lp_se = lrm_lp$se.fit,
-         prob = plogis(lp),
-         lower = plogis(lp - qnorm(.975) * lp_se),
-         upper = plogis(lp + qnorm(.975) * lp_se))
+probs_calendar_time <- predict_mortality(
+  lrm_fit_all, newdata = train_sample, 
+  vars_to_vary = list(calendar_time = calendar_times_to_vary)
+) %>%
+  mutate(Date = min_index_date + calendar_time) %>%
+  rename(`Calendar time` = calendar_time, `Mortality probability` = prob) %>%
+  relocate(Date)
+```
 
-# Mean predictions by variables to vary
-lrm_probs <- newdata %>%
+```{r}
+kable(probs_calendar_time) %>% kable_styling()
+```
+
+### Varying age, sex, and calendar time
+We will start by predicting point estimates only.
+
+```{r}
+sex_to_vary <- unique(train_data$sex) %>%
+  .[!is.na(.)]
+
+# Predict point estimates
+probs_age_sex_calendar <- predict_mortality(
+  lrm_fit_all, newdata = train_sample, 
+  vars_to_vary = list(age = ages_to_vary,
+                      sex = sex_to_vary,
+                      calendar_time = calendar_times_to_vary))
+
+# Summarize in table
+probs_age_sex_calendar %>%
+  arrange(calendar_time, sex, age) %>%
+  mutate(Date = min_index_date + calendar_time) %>%
+  select(-calendar_time) %>%
+  relocate(Date, sex) %>%
+  rename(`Sex` = sex, `Age` = age,
+         `Mortality probability` = prob) %>%
+  
+  ## Using DT::datatable
+  datatable(rownames = FALSE,
+            filter = "top",
+          options = list(pageLength = 20)) %>%
+  formatRound("Mortality probability", 4)
+```
+
+We we will also compute 95% confidence intervals by bootstrapping.
+
+```{r, message = FALSE, cache = TRUE}
+bootprobs_age_sex_calendar <- predict_mortality_boot(
+  lrm_fit_all, newdata = train_sample, 
+  vars_to_vary = list(age = ages_to_vary,
+                      sex = sex_to_vary,
+                      calendar_time = calendar_times_to_vary),
+  B = n_boot_probs) 
+```
+
+Let's plot the results.
+
+```{r predProbs, fig.height = 4, fig.width = 7}
+bootprobs_age_sex_calendar %>%
+  # Summarize bootstrap results
   group_by(age, sex, calendar_time) %>%
-  summarise(prob = mean(prob),
-            lower = mean(lower),
-            upper = mean(upper)) %>%
-  mutate(date = min_index_date + calendar_time)
+  summarise(
+    prob_mean = mean(prob),
+    prob_lower = quantile(prob, .025),
+    prob_upper = quantile(prob, .975)
+  ) %>%
+  mutate(date = min_index_date + calendar_time) %>%
 
-# Plot
-ggplot(lrm_probs, aes(x = age, y = prob, color = sex, fill = sex)) +
-  geom_line() +
-  facet_wrap(~date) +
-  # geom_ribbon(aes(ymin = lower, ymax = upper), alpha = 0.1,
-  #             linetype = 0) +
-  geom_line(aes(x = age, y = lower, color = sex),  linetype = "dotted") +
-  geom_line(aes(x = age, y = upper, color = sex),  linetype = "dotted") +
-  xlab("Age") +
-  ylab("Mortality probability") +
-  scale_color_discrete("") +
-  scale_fill_discrete("") +
-  theme(legend.position = "bottom")
+  # Plot
+  ggplot(aes(x = age, y = prob_mean, color = sex, fill = sex)) +
+    geom_line() +
+    facet_wrap(~date) +
+    geom_line(aes(x = age, y = prob_lower, color = sex),  linetype = "dotted") +
+    geom_line(aes(x = age, y = prob_upper, color = sex),  linetype = "dotted") +
+    xlab("Age") +
+    ylab("Mortality probability") +
+    scale_color_discrete("") +
+    scale_fill_discrete("") +
+    theme(legend.position = "bottom")
 ```
 
 # Model validation
@@ -1583,10 +1691,10 @@ A shrinkage factor can also be estimated within each bootstrap sample to gauge t
 
 
 ```{r, cache = TRUE}
-lrm_val_age <- validate(lrm_fit_age, B = n_boot)
-lrm_val_d <- validate(lrm_fit_d, B = n_boot)
-lrm_val_dc <- validate(lrm_fit_dc, B = n_boot)
-lrm_val_all <- validate(lrm_fit_all, B = n_boot) 
+lrm_val_age <- validate(lrm_fit_age, B = n_boot_val)
+lrm_val_d <- validate(lrm_fit_d, B = n_boot_val)
+lrm_val_dc <- validate(lrm_fit_dc, B = n_boot_val)
+lrm_val_all <- validate(lrm_fit_all, B = n_boot_val) 
 ```
 
 ```{r}
@@ -1633,10 +1741,10 @@ list(lrm_val_age, lrm_val_d, lrm_val_dc, lrm_val_all) %>%
 
 ## Calibration curves
 ```{r calCurve, cache = TRUE, fig.width = 8, fig.height = 6}
-lrm_cal_age <- calibrate(lrm_fit_age, B = n_boot)
-lrm_cal_d <- calibrate(lrm_fit_d, B = n_boot)
-lrm_cal_dc <- calibrate(lrm_fit_dc, B = n_boot)
-lrm_cal_all <- calibrate(lrm_fit_all, B = n_boot)
+lrm_cal_age <- calibrate(lrm_fit_age, B = n_boot_val)
+lrm_cal_d <- calibrate(lrm_fit_d, B = n_boot_val)
+lrm_cal_dc <- calibrate(lrm_fit_dc, B = n_boot_val)
+lrm_cal_all <- calibrate(lrm_fit_all, B = n_boot_val)
 lrm_cal_list <- list(lrm_cal_age, lrm_cal_d, lrm_cal_dc, lrm_cal_all)
 names(lrm_cal_list) <- lrm_names
 
