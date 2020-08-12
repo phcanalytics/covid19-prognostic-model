@@ -43,6 +43,7 @@ n_imputations <- 2    # Number of multiple imputations with MICE
 n_boot_val <- 40      # Number of bootstraps with rms validation and calibration
 n_boot_probs <- 100   # Number of bootstraps for computing predicted probabilitiy CIs
 n_rep <- 2            # Number of repeats with grouped lasso
+CACHE <- TRUE         # Whether to use cached results for long computations
 ```
 
 # Data
@@ -456,7 +457,7 @@ plot_hist(continuous_var_t_df)
 ```
 
 ##### Scatterplots
-```{r, cache = TRUE}
+```{r, cache = CACHE}
 x_vars <- c("age")
 y_vars <- c("bmi")
 p <- vector(mode = "list", length = length(x_vars))
@@ -842,7 +843,7 @@ comorbidities_to_include <- comorbidity_vars %>%
   pull(var) %>%
   c("diab", "hyp")
 vitals_to_include <- c("bmi", "temp", "hr", "resp", "sbp")
-labs_to_include <- c("spo2", "crp_t", "tni_t", "alt_t", "ast_t", "ferritin_t",
+labs_to_include <- c("spo2", "crp_t", "tni_t", "ast_t", "ferritin_t",
                      "creatinine_t", "ldh_t", "lymphocyte_t", "neutrophil_t",
                      "plt_t", "wbc_t")
 vars <- vars %>%
@@ -884,7 +885,7 @@ train_data <- train_data %>% mutate(
 
 We can now multiply impute data use MICE.
 
-```{r, cache = TRUE}
+```{r, cache = CACHE}
 # Run MICE algorithm
 mice_out <- train_data %>%
   select(c(one_of(get_included_vars()), "died")) %>%
@@ -1044,7 +1045,7 @@ candidate_model_rhs <- make_rhs(get_included_vars())
 
 Finally, we will (i) add the new race/ethnicity variable to the "MICE" object and (ii) create a list of imputed datasets for analysis.
 
-```{r, cache = TRUE}
+```{r, cache = CACHE}
 mice_out <- as.mids(mi_df)
 mi_list <- mi_df %>% 
   filter(.imp > 0) %>% 
@@ -1066,7 +1067,6 @@ candidate_model_rhs <- candidate_model_rhs %>%
                        rcs(spo2, 3) - spo2 +
                        rcs(crp_t, 3) - crp_t +
                        rcs(tni_t, 3) - tni_t +
-                       rcs(alt_t, 3) - alt_t +
                        rcs(ast_t, 3) - ast_t +
                        rcs(creatinine_t, 3) - creatinine_t +
                        rcs(ferritin_t, 3) - ferritin_t +
@@ -1125,7 +1125,7 @@ match_terms_to_vars <- function(t){
 
 Finally, we run the grouped lasso.
 
-```{r, cache = TRUE}
+```{r, cache = CACHE}
 # Number of folds for cross-validation
 n_folds <- 10
 
@@ -1328,7 +1328,7 @@ mixed_assoc <- function(df, cor_method = "spearman", adjust_cramersv_bias = TRUE
 }
 ```
 
-```{r, cache = TRUE, eval = FALSE}
+```{r, cache = CACHE, eval = FALSE}
 # Create correlation matrix of associations
 corr_mat <- mi_df %>% 
   filter(.imp == 1) %>% 
@@ -1640,7 +1640,7 @@ probs_age_sex_calendar %>%
 
 We we will also compute 95% confidence intervals by bootstrapping.
 
-```{r, message = FALSE, cache = TRUE}
+```{r, message = FALSE, cache = CACHE}
 bootprobs_age_sex_calendar <- predict_mortality_boot(
   lrm_fit_all, newdata = train_sample, 
   vars_to_vary = list(age = ages_to_vary,
@@ -1690,7 +1690,7 @@ We will start by using bootstrapping to estimate model performance and check for
 A shrinkage factor can also be estimated within each bootstrap sample to gauge the extent of overfitting. This is done by fitting $g(Y) = \gamma_0 + \gamma_1 X\hat{\beta}$ where $X$ and $Y$ are the covariates and outcome, respectively, in the test sample (i.e., in step 2c) and $\hat{\beta}$ is estimating in the training sample (i.e., step 2b). If there is no overfitting, then $\gamma_0 = 0$ and $\gamma_1 = 1$; conversely, if there is overfitting, then $\gamma_1 < 1$ and $\gamma_0 \neq 1$ to compensate.  
 
 
-```{r, cache = TRUE}
+```{r, cache = CACHE}
 lrm_val_age <- validate(lrm_fit_age, B = n_boot_val)
 lrm_val_d <- validate(lrm_fit_d, B = n_boot_val)
 lrm_val_dc <- validate(lrm_fit_dc, B = n_boot_val)
@@ -1740,7 +1740,7 @@ list(lrm_val_age, lrm_val_d, lrm_val_dc, lrm_val_all) %>%
 ```
 
 ## Calibration curves
-```{r calCurve, cache = TRUE, fig.width = 8, fig.height = 6}
+```{r calCurve, cache = CACHE, fig.width = 8, fig.height = 6}
 lrm_cal_age <- calibrate(lrm_fit_age, B = n_boot_val)
 lrm_cal_d <- calibrate(lrm_fit_d, B = n_boot_val)
 lrm_cal_dc <- calibrate(lrm_fit_dc, B = n_boot_val)
