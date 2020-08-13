@@ -1258,46 +1258,49 @@ options(datadist = "dd")
 ```
 
 ## Fit
-As described in the paper, four models are fit that include the following predictors: (i) age only, (ii) all demographics (and calendar time), and (iii) demographics (and calendar time) and comorbidities, and (iv) all variables selected by the grouped lasso. 
-
-```{r}
-f_logit_all <- update.formula(model_rhs, died ~ .)
-```
+As described in the paper, five models are fit that include the following predictors: (i) age only, (ii) comorbidities only, (iii) all demographics (and calendar time), and (iv) demographics (and calendar time) and comorbidities, and (v) all variables selected by the grouped lasso. 
 
 ```{r}
 # The four models
 lrm_names <- c("Age only",
-                "All demographics",
-                "Demographics and comorbidities",
-                "All variables")
+               "Comorbidities only",
+               "All demographics",
+               "Demographics and comorbidities",
+               "All variables")
 
 ## (1): fit_age: Only includes age
-f_logit_age <- died ~ age 
-lrm_fit_age <- fit.mult.impute(f_logit_age, fitter = lrm, xtrans = mice_out, pr = FALSE,
-                                x = TRUE, y = TRUE)
+f_lrm_age <- died ~ age 
+lrm_fit_age <- fit.mult.impute(f_lrm_age, fitter = lrm, xtrans = mice_out, pr = FALSE,
+                               x = TRUE, y = TRUE)
 
-## (2): fit_d: All demographics including age
-f_logit_d <- update.formula(f_logit_age, ~. + sex + rcs(calendar_time, 3) + 
-                              race_ethnicity + division)
-lrm_fit_d <- fit.mult.impute(f_logit_d, fitter = lrm, xtrans = mice_out, pr = FALSE,
+## (2): fit_c: Only includes comorbidities
+f_lrm_c <- as.formula(paste0("died ~", paste(c_vars, collapse = "+")))
+lrm_fit_c <- fit.mult.impute(f_lrm_c, fitter = lrm, xtrans = mice_out, 
+                             pr = FALSE, x = TRUE, y = TRUE) 
+
+## (3): fit_d: All demographics including age
+f_lrm_d <- update.formula(f_lrm_age, ~. + sex + rcs(calendar_time, 3) + 
+                          race_ethnicity + division)
+lrm_fit_d <- fit.mult.impute(f_lrm_d, fitter = lrm, xtrans = mice_out, pr = FALSE,
                              x = TRUE, y = TRUE)
 
-## (3): fit_dc: Demographics and comorbidities
+## (4): fit_dc: Demographics and comorbidities
 c_vars <- vars %>%
   filter(group == "Comorbidities" & include == 1 & !var %in% vars_to_exclude) %>%
   pull(var)
-f_logit_dc <- update.formula(f_logit_d, 
-                             as.formula(paste0("~.+", paste(c_vars, collapse = "+"))))
-lrm_fit_dc <- fit.mult.impute(f_logit_dc, fitter = lrm, xtrans = mice_out, pr = FALSE,
+f_lrm_dc <- update.formula(f_lrm_d, 
+                           as.formula(paste0("~.+", paste(c_vars, collapse = "+"))))
+lrm_fit_dc <- fit.mult.impute(f_lrm_dc, fitter = lrm, xtrans = mice_out, pr = FALSE,
                               x = TRUE, y = TRUE)
 
-## (4): fit: The main model including demographics, comorbidities, vitals, and labs
-lrm_fit_all <- fit.mult.impute(f_logit_all, fitter = lrm, xtrans = mice_out, 
+## (5): fit_all: The main model including demographics, comorbidities, vitals, and labs
+f_lrm_all <- update.formula(model_rhs, died ~ .)
+lrm_fit_all <- fit.mult.impute(f_lrm_all, fitter = lrm, xtrans = mice_out, 
                                pr = FALSE, x = TRUE, y = TRUE)
 
-# Note that we can also estimate the models with stats::glm
+### Note that we can also estimate the models with stats::glm
 glm_fits_all <- mi_list %>%
-  map(function (x) glm(f_logit_all, data = x, family = "binomial")) 
+  map(function (x) glm(f_lrm_all, data = x, family = "binomial")) 
 glm_fit_all <- glm_fits_all %>% pool()
 ```
 
@@ -1715,6 +1718,7 @@ A shrinkage factor can also be estimated within each bootstrap sample to gauge t
 
 ```{r, cache = CACHE}
 lrm_val_age <- validate(lrm_fit_age, B = n_boot_val)
+lrm_val_c <- validate(lrm_fit_c, B = n_boot_val) 
 lrm_val_d <- validate(lrm_fit_d, B = n_boot_val)
 lrm_val_dc <- validate(lrm_fit_dc, B = n_boot_val)
 lrm_val_all <- validate(lrm_fit_all, B = n_boot_val) 
@@ -1742,6 +1746,7 @@ make_validation_tbl <- function(object){
 }
 
 make_validation_tbl(lrm_val_age)
+make_validation_tbl(lrm_val_c) 
 make_validation_tbl(lrm_val_all)
 ```
 
@@ -1757,7 +1762,7 @@ summarize_performance <- function(objects){
     kable_styling()
 }
 
-list(lrm_val_age, lrm_val_d, lrm_val_dc, lrm_val_all) %>%
+list(lrm_val_age, lrm_val_c, lrm_val_d, lrm_val_dc, lrm_val_all) %>%
   set_names(lrm_names) %>%
   summarize_performance() 
 ```
@@ -1765,10 +1770,11 @@ list(lrm_val_age, lrm_val_d, lrm_val_dc, lrm_val_all) %>%
 ## Calibration curves
 ```{r calCurve, cache = CACHE, fig.width = 8, fig.height = 6}
 lrm_cal_age <- calibrate(lrm_fit_age, B = n_boot_val)
+lrm_cal_c <- calibrate(lrm_fit_c, B = n_boot_val)
 lrm_cal_d <- calibrate(lrm_fit_d, B = n_boot_val)
 lrm_cal_dc <- calibrate(lrm_fit_dc, B = n_boot_val)
 lrm_cal_all <- calibrate(lrm_fit_all, B = n_boot_val)
-lrm_cal_list <- list(lrm_cal_age, lrm_cal_d, lrm_cal_dc, lrm_cal_all)
+lrm_cal_list <- list(lrm_cal_age, lrm_cal_c, lrm_cal_d, lrm_cal_dc, lrm_cal_all)
 names(lrm_cal_list) <- lrm_names
 
 plot_calibration <- function(object){
