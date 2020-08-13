@@ -51,9 +51,21 @@ We begin by loading the "training" dataset and restrict to (i) patients age 18 a
 
 ## Load
 ```{r}
+filter_ie <- function(data){
+  data1 <- data %>%
+    filter(age >= 18) 
+  data2 <- data1 %>%
+    filter(as.Date("2020-06-05") - index_date > 14)
+  n_dropped <- nrow(data1) - nrow(data2)
+  percent_dropped <- formatC(100 * n_dropped/nrow(data1), 
+                             format = "f", digits = 2)
+  message(n_dropped, " (", percent_dropped, "%)",
+          " of patients were dropped due to the 2-week cutoff.")
+  return(data2)
+}
+
 train_data <- readRDS("train_data.rds")  %>%
-  filter(age >= 18) %>%
-  filter(as.Date("2020-06-05") - index_date > 14)
+  filter_ie()
 ```
 
 ## Clean 
@@ -74,8 +86,10 @@ train_data <- train_data %>%
     spo2 = ifelse(spo2 > 100, 100, spo2)
   ) %>%
   
-  ## Add option for comorbidities in create_comorbidities() to be character
-  rename(diabunc = diab) %>%
+  ## Better names for some variables
+  rename(diabunc = diab, cci = score) %>%
+  
+  ## Convert omorbidities to character
   mutate_at(
     c("ami", "chf", "pvd", "cevd", "dementia", "copd", "rheumd", "pud",
       "mld", "diabunc", "diabwc", "hp", "rend", "canc", "msld", "metacanc",
@@ -147,7 +161,7 @@ demographic_cat_vars <- tribble(
 ) %>% 
   mutate(group = "Demographics")
 
-comorbidity_vars <- tribble(
+comorbidity_cat_vars <- tribble(
   ~var, ~varlab,
   "ami", "Acute myocardial infarction",
   "chf", "Congestive heart failure",
@@ -191,6 +205,12 @@ demographic_continuous_vars <- tribble(
 ) %>%
   mutate(group = "Demographics")
 
+comorbidity_continuous_vars <- tribble(
+  ~var, ~varlab,
+  "cci", "CCI",
+) %>%
+  mutate(group = "Comorbidities")
+
 vital_continuous_vars <- tribble(
   ~var, ~varlab,
   "bmi", "Body Mass Index (BMI)",
@@ -223,6 +243,7 @@ lab_vars <- tribble(
 
 continuous_vars <- bind_rows(
   demographic_continuous_vars,
+  comorbidity_continuous_vars,
   vital_continuous_vars,
   lab_vars
 )
@@ -503,31 +524,33 @@ train_data %>%
 ## Table 1
 ```{r tableOne}
 # Select variables for table 1
-remove_varnames <- c("race", "ethnicity", "bmi_cat", "hypunc", "hypc", 
-                     "diabunc", "diabwc")
+varnames_to_remove <- c("race", "ethnicity", "bmi_cat", "hypunc", "hypc", 
+                        "diabunc", "diabwc")
 
 all_varnames <- bind_rows(
   demographic_cat_vars,
   demographic_continuous_vars,
-  comorbidity_vars,
+  comorbidity_cat_vars,
+  comorbidity_continuous_vars,
   vital_cat_vars,
   vital_continuous_vars,
   lab_vars
 ) %>%
-  filter(!var %in% remove_varnames) %>%
+  filter(!var %in% varnames_to_remove) %>%
   pull(var)
 
 categorical_varnames <- bind_rows(
   demographic_cat_vars,
-  comorbidity_vars,
+  comorbidity_cat_vars,
   vital_cat_vars
 ) %>%
-  filter(!var %in% remove_varnames) %>%
+  filter(!var %in% varnames_to_remove) %>%
   pull(var)
 
 non_normal_varnames <- c(
   demographic_continuous_vars$var,
   vital_continuous_vars$var,
+  comorbidity_continuous_vars$var,
   lab_vars$var
 )
   
@@ -839,7 +862,7 @@ Let's specify variables that will be candidates for our model and used during va
 demographics_to_include <- c("age", "sex", "race", "ethnicity", "division",
                              "smoke", "calendar_time")
 comorbidities_to_include <- comorbidity_vars %>%
-  filter(!var %in% c("diabunc", "diabwc", "hypunc", "hypc")) %>%
+  filter(!var %in% c("diabunc", "diabwc", "hypunc", "hypc", "cci")) %>%
   pull(var) %>%
   c("diab", "hyp")
 vitals_to_include <- c("bmi", "temp", "hr", "resp", "sbp")
