@@ -89,6 +89,9 @@ train_data <- train_data %>%
   ## Better names for some variables
   rename(diabunc = diab, cci = score) %>%
   
+  ## CCI should be an integer
+  mutate(cci = as.integer(cci)) %>%
+  
   ## Convert omorbidities to character
   mutate_at(
     c("ami", "chf", "pvd", "cevd", "dementia", "copd", "rheumd", "pud",
@@ -477,19 +480,56 @@ continuous_var_t_df <- pivot_continuous_longer(train_data,
 plot_hist(continuous_var_t_df)
 ```
 
-##### Scatterplots
-```{r, cache = CACHE}
-x_vars <- c("age")
-y_vars <- c("bmi")
-p <- vector(mode = "list", length = length(x_vars))
-for (i in 1:length(x_vars)){
-  p[[i]] <- ggplot(train_data, aes_string(x = x_vars[i], y = y_vars[i])) + 
-  geom_point() + 
-  #geom_smooth(method = "loess", formula = y ~ x) +
-  xlab(get_var_labs(x_vars[i])) +
-  ylab(get_var_labs(y_vars[i]))
+## Bivariate relationships
+### Age and comorbidities
+We start with the Charlson Comorbidity Index (CCI).
+
+```{r, message = FALSE}
+ggplot(train_data, aes_string(x = "age", y = "cci")) + 
+  geom_point() +
+  geom_smooth() +
+  xlab(get_var_labs("age")) +
+  ylab(get_var_labs("cci"))
+```
+
+Next, we will examine each comorbidity separately by plotting the probability that a patient has each comorbidity as a function of their age.
+
+```{r, fig.height = 10, fig.width = 8, cache = CACHE, message = FALSE}
+train_data[, c("age", comorbidity_cat_vars$var)] %>%
+  pivot_longer(cols = comorbidity_cat_vars$var,
+               names_to = "comorbidity") %>%
+  mutate(value = ifelse(value == "No", 0L, 1L),
+         comorbidity = get_var_labs(comorbidity)) %>%
+  
+  # Make plot
+  ggplot(aes(x = age, y = value)) + 
+    geom_smooth() +
+    facet_wrap(~comorbidity, ncol = 4) +
+   xlab(get_var_labs("age")) +
+   ylab("Probability")
+```
+
+### Age and vitals
+```{r, cache = CACHE, message = FALSE, fig.height = 5, fig.width = 8}
+plot_age_scatter_continuous <- function(vars){
+  train_data[, c("age", vars)] %>%
+  pivot_longer(cols = all_of(vars)) %>%
+  mutate(name = get_var_labs(name)) %>%
+  
+  # Make plot
+  ggplot(aes(x = age, y = value)) + 
+    geom_smooth() +
+    facet_wrap(~name, ncol = 4, scales = "free_y") +
+   xlab(get_var_labs("age")) +
+   ylab("Value")
 }
-do.call("grid.arrange", c(p, nrow = 1))
+plot_age_scatter_continuous(vital_continuous_vars$var)
+```
+
+### Age and labs
+```{r, message = FALSE, cache = CACHE, fig.height = 8, fig.width = 8}
+plot_age_scatter_continuous(lab_vars_t$var) +
+   theme(strip.text.x = element_text(size = 7))
 ```
 
 ### Outcomes
