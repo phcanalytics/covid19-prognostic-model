@@ -31,7 +31,7 @@ aidsYes,aids - Yes:No,AIDS/HIV,aids
 pvdYes,pvd - Yes:No,Peripheral vascular disease,pvd
 cevdYes,cevd - Yes:No,Cerebrovascular disease,cevd
 dementiaYes,dementia - Yes:No,Dementia,dementia
-copdYes,copd - Yes:No,COPD,copd
+cpdYes,cpd - Yes:No,CPD,cpd
 hypuncYes,hypunc - Yes:No,Hypertension (no complications),hypunc
 hypcYes,hypc - Yes:No,Hypertension (complications),hypc
 hypYes,hyp - Yes:No,Hypertension,hyp

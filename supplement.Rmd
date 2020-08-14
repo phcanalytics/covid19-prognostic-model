@@ -43,7 +43,7 @@ n_imputations <- 2    # Number of multiple imputations with MICE
 n_boot_val <- 40      # Number of bootstraps with rms validation and calibration
 n_boot_probs <- 100   # Number of bootstraps for computing predicted probabilitiy CIs
 n_rep <- 2            # Number of repeats with grouped lasso
-CACHE <- TRUE         # Whether to use cached results for long computations
+CACHE <- FALSE         # Whether to use cached results for long computations
 ```
 
 # Data
@@ -60,7 +60,7 @@ filter_ie <- function(data){
   percent_dropped <- formatC(100 * n_dropped/nrow(data1), 
                              format = "f", digits = 2)
   message(n_dropped, " (", percent_dropped, "%)",
-          " of patients were dropped due to the 2-week cutoff.")
+          " patients were dropped due to the 2-week cutoff.")
   return(data2)
 }
 
@@ -94,7 +94,7 @@ train_data <- train_data %>%
   
   ## Convert omorbidities to character
   mutate_at(
-    c("ami", "chf", "pvd", "cevd", "dementia", "copd", "rheumd", "pud",
+    c("ami", "chf", "pvd", "cevd", "dementia", "cpd", "rheumd", "pud",
       "mld", "diabunc", "diabwc", "hp", "rend", "canc", "msld", "metacanc",
       "aids", "hypc", "hypunc"),
     function (x) ifelse(x == 1, "Yes", "No")
@@ -171,7 +171,7 @@ comorbidity_cat_vars <- tribble(
   "pvd", "Peripheral vascular disease",
   "cevd", "Cerebrovascular disease",
   "dementia", "Dementia",
-  "copd", "Chronic pulmonary disease",
+  "cpd", "Chronic pulmonary disease",
   "rheumd", "Rheumatoid disease",
   "pud", "Peptic ulcer disease",
   "mld", "Mild liver disease",
@@ -197,7 +197,7 @@ vital_cat_vars <- tribble(
   mutate(group = "Vitals")
 
 cat_vars <- bind_rows(demographic_cat_vars,
-                      comorbidity_vars,
+                      comorbidity_cat_vars,
                       vital_cat_vars)
 
 ## Continuous variables
@@ -901,8 +901,8 @@ Let's specify variables that will be candidates for our model and used during va
 ```{r}
 demographics_to_include <- c("age", "sex", "race", "ethnicity", "division",
                              "smoke", "calendar_time")
-comorbidities_to_include <- comorbidity_vars %>%
-  filter(!var %in% c("diabunc", "diabwc", "hypunc", "hypc", "cci")) %>%
+comorbidities_to_include <- comorbidity_cat_vars %>%
+  filter(!var %in% c("diabunc", "diabwc", "hypunc", "hypc")) %>%
   pull(var) %>%
   c("diab", "hyp")
 vitals_to_include <- c("bmi", "temp", "hr", "resp", "sbp")
@@ -1314,6 +1314,9 @@ lrm_fit_age <- fit.mult.impute(f_lrm_age, fitter = lrm, xtrans = mice_out, pr = 
                                x = TRUE, y = TRUE)
 
 ## (2): fit_c: Only includes comorbidities
+c_vars <- vars %>%
+  filter(group == "Comorbidities" & include == 1 & !var %in% vars_to_exclude) %>%
+  pull(var)
 f_lrm_c <- as.formula(paste0("died ~", paste(c_vars, collapse = "+")))
 lrm_fit_c <- fit.mult.impute(f_lrm_c, fitter = lrm, xtrans = mice_out, 
                              pr = FALSE, x = TRUE, y = TRUE) 
@@ -1325,9 +1328,6 @@ lrm_fit_d <- fit.mult.impute(f_lrm_d, fitter = lrm, xtrans = mice_out, pr = FALS
                              x = TRUE, y = TRUE)
 
 ## (4): fit_dc: Demographics and comorbidities
-c_vars <- vars %>%
-  filter(group == "Comorbidities" & include == 1 & !var %in% vars_to_exclude) %>%
-  pull(var)
 f_lrm_dc <- update.formula(f_lrm_d, 
                            as.formula(paste0("~.+", paste(c_vars, collapse = "+"))))
 lrm_fit_dc <- fit.mult.impute(f_lrm_dc, fitter = lrm, xtrans = mice_out, pr = FALSE,
