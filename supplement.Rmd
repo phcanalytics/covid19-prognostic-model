@@ -18,6 +18,7 @@ library("cowplot") # 1.0.0
 library("dplyr") # 1.0.0
 library("DT") #0.14
 library("ggplot2") # 3.3.1
+library("glmnet") # 4.0-2
 library("oem") # 2.0.10
 library("gridExtra") # 2.3
 library("knitr") # 1.28
@@ -43,7 +44,7 @@ n_imputations <- 2    # Number of multiple imputations with MICE
 n_boot_val <- 40      # Number of bootstraps with rms validation and calibration
 n_boot_probs <- 100   # Number of bootstraps for computing predicted probabilitiy CIs
 n_rep <- 2            # Number of repeats with grouped lasso
-CACHE <- FALSE         # Whether to use cached results for long computations
+CACHE <- TRUE         # Whether to use cached results for long computations
 ```
 
 # Data
@@ -70,40 +71,8 @@ train_data <- readRDS("train_data.rds")  %>%
 
 ## Clean 
 ```{r}
-# Recoding
-train_data <- train_data %>% 
-  mutate(
-    ## "died" in add_deaths() should be an integer
-    died = as.integer(died),
-    
-    ## Convert unknown or other/unknown to missing
-    race = ifelse(race == "Other/Unknown", NA, race),
-    ethnicity = ifelse(ethnicity == "Unknown", NA, ethnicity),
-    sex = ifelse(sex == "Unknown", NA, sex),
-    
-    ## Oxygen saturation should have plausible values
-    spo2 = ifelse(spo2 == 0, NA_real_, spo2),
-    spo2 = ifelse(spo2 > 100, 100, spo2)
-  ) %>%
-  
-  ## Better names for some variables
-  rename(diabunc = diab, cci = score) %>%
-  
-  ## CCI should be an integer
-  mutate(cci = as.integer(cci)) %>%
-  
-  ## Convert omorbidities to character
-  mutate_at(
-    c("ami", "chf", "pvd", "cevd", "dementia", "cpd", "rheumd", "pud",
-      "mld", "diabunc", "diabwc", "hp", "rend", "canc", "msld", "metacanc",
-      "aids", "hypc", "hypunc"),
-    function (x) ifelse(x == 1, "Yes", "No")
-  ) 
-
-# Create "derived" variables
-
-## Function to add race/ethnicity variable to dataset (done after separately 
-## imputing missing race + ethnicity information)
+# Function to add race/ethnicity variable to dataset (done after separately 
+# imputing missing race + ethnicity information)
 add_race_ethnicity <- function(data){
   data %>% mutate(
     race_ethnicity = case_when(
@@ -116,8 +85,51 @@ add_race_ethnicity <- function(data){
     race_ethnicity = relevel(factor(race_ethnicity), ref = "Non-Hispanic white")
   )
 }
+```
 
-train_data <- train_data %>%
+```{r}
+clean_data <- function(data){
+  # Recoding
+data <- data %>% 
+  mutate(
+    ## "died" in add_deaths() should be an integer
+    died = as.integer(died),
+    
+    ## Convert unknown or other/unknown to missing
+    race = ifelse(race == "Other/Unknown", NA, race),
+    ethnicity = ifelse(ethnicity == "Unknown", NA, ethnicity),
+    sex = ifelse(sex == "Unknown", NA, sex),
+    
+    ## Oxygen saturation should have plausible values
+    spo2 = ifelse(spo2 == 0, NA_real_, spo2),
+    spo2 = ifelse(spo2 > 100, 100, spo2),
+    
+    # # Division
+    ## Set "Other" region to missing since all 9 geographic regions are in the data
+    division = ifelse(division == "Other", NA, division),
+    
+    ## Move small categories to other
+    division = ifelse(division %in% c("East South Central", "Mountain"),
+                      "Other", 
+                      division)
+  ) %>%
+  
+  ## Better names for some variables
+  rename(diabunc = diab, cci = score) %>%
+  
+  ## CCI should be an integer
+  mutate(cci = as.integer(cci)) %>%
+  
+  ## Convert comorbidities to character
+  mutate_at(
+    c("ami", "chf", "pvd", "cevd", "dementia", "cpd", "rheumd", "pud",
+      "mld", "diabunc", "diabwc", "hp", "rend", "canc", "msld", "metacanc",
+      "aids", "hypc", "hypunc"),
+    function (x) ifelse(x == 1, "Yes", "No")
+  ) 
+
+# Create "derived" variables
+data <- data %>%
   mutate(
     calendar_time = as.numeric(index_date - min(index_date)),
     index_month = as.integer(format(index_date, "%m")),
@@ -147,6 +159,12 @@ train_data <- train_data %>%
   ## Create race/ethnicity variable
   ## Later to be created after imputation from imputed race + ethnicity
   add_race_ethnicity() 
+
+  # Return
+  return(data)
+}
+
+train_data <- clean_data(train_data)
 ```
 
 ## Label
@@ -450,16 +468,20 @@ train_data %>%
 # Truncate labs using outer fence
 truncate_max <- function(v) outer_fence(v)
 
-for (i in 1:length(lab_vars$var)){
-  original_var <- lab_vars$var[i]
-  truncated_var <- paste0(original_var, "_t")
-  truncated_max_i <- truncate_max(train_data[[original_var]])
-  train_data <- train_data %>% mutate(
-    !!truncated_var := ifelse(get(original_var) > truncated_max_i, 
-                              truncated_max_i, 
-                              get(original_var))
+add_truncated_lab_vars <- function(data, v){
+  for (i in 1:length(v)){ # Start loop over labs
+    original_var <- v[i]
+    truncated_var <- paste0(original_var, "_t")
+    truncated_max_i <- truncate_max(data[[original_var]])
+    data <- data %>% mutate(
+      !!truncated_var := ifelse(get(original_var) > truncated_max_i, 
+                                truncated_max_i, 
+                                get(original_var))
     )
+  } # End loop over labs
+  return(data)
 }
+train_data <- add_truncated_lab_vars(train_data, v = lab_vars$var)
 ```
 
 After truncating the labs, the probability distributions appear more reasonable. 
@@ -478,6 +500,35 @@ continuous_vars_t <- bind_rows(
 continuous_var_t_df <- pivot_continuous_longer(train_data, 
                                                vars = continuous_vars_t)
 plot_hist(continuous_var_t_df)
+```
+
+### Outcomes
+```{r, fig.height = 4, fig.width = 6}
+train_data %>%
+  count(died) %>%
+  mutate(died = ifelse(died == 1, "Yes", "No"),
+         prop = n/sum(n)) %>%
+  ggplot(aes(x = died, y = prop)) +
+  geom_bar(stat = "identity") +
+  geom_text(aes(label = formatC(prop, format = "f", digits = 2)),
+            nudge_y = .03, size = 3) +
+  xlab("Died") +
+  ylab("Proportion") 
+```
+
+#### Time to death
+```{r, fig.height = 5, fig.width = 7}
+train_data %>%
+  mutate(months_to_death = death_month - index_month) %>%
+  filter(!is.na(months_to_death)) %>%
+  group_by(months_to_death) %>%
+  tally() %>%
+  
+  # Plot
+  ggplot(aes(x = factor(months_to_death), y = n)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  xlab("Months from index date to death") +
+  ylab("Count")
 ```
 
 ## Bivariate relationships
@@ -511,54 +562,33 @@ train_data[, c("age", comorbidity_cat_vars$var)] %>%
 
 ### Age and vitals
 ```{r, cache = CACHE, message = FALSE, fig.height = 5, fig.width = 8}
-plot_age_scatter_continuous <- function(vars){
-  train_data[, c("age", vars)] %>%
-  pivot_longer(cols = all_of(vars)) %>%
-  mutate(name = get_var_labs(name)) %>%
+plot_scatter_continuous <- function(x_var, y_vars){
+  train_data[, c(x_var, y_vars)] %>%
+    pivot_longer(cols = all_of(y_vars)) %>%
+    mutate(name = get_var_labs(name)) %>%
   
   # Make plot
-  ggplot(aes(x = age, y = value)) + 
-    geom_smooth() +
+  ggplot(aes_string(x = x_var, y = "value")) + 
+    geom_smooth(se = FALSE) +
     facet_wrap(~name, ncol = 4, scales = "free_y") +
-   xlab(get_var_labs("age")) +
-   ylab("Value")
+    xlab(get_var_labs(x_var)) +
+    ylab("Value")
 }
-plot_age_scatter_continuous(vital_continuous_vars$var)
+
+plot_scatter_continuous("age", vital_continuous_vars$var)
 ```
 
 ### Age and labs
 ```{r, message = FALSE, cache = CACHE, fig.height = 8, fig.width = 8}
-plot_age_scatter_continuous(lab_vars_t$var) +
+plot_scatter_continuous("age", lab_vars_t$var) +
    theme(strip.text.x = element_text(size = 7))
 ```
 
-### Outcomes
-```{r, fig.height = 4, fig.width = 6}
-train_data %>%
-  count(died) %>%
-  mutate(died = ifelse(died == 1, "Yes", "No"),
-         prop = n/sum(n)) %>%
-  ggplot(aes(x = died, y = prop)) +
-  geom_bar(stat = "identity") +
-  geom_text(aes(label = formatC(prop, format = "f", digits = 2)),
-            nudge_y = .03, size = 3) +
-  xlab("Died") +
-  ylab("Proportion") 
-```
-
-#### Time to death
-```{r, fig.height = 5, fig.width = 7}
-train_data %>%
-  mutate(months_to_death = death_month - index_month) %>%
-  filter(!is.na(months_to_death)) %>%
-  group_by(months_to_death) %>%
-  tally() %>%
-  
-  # Plot
-  ggplot(aes(x = factor(months_to_death), y = n)) +
-  geom_bar(stat = "identity", position = "dodge") +
-  xlab("Months from index date to death") +
-  ylab("Count")
+### Comorbidities and labs/vitals
+```{r, fig.height = 10, fig.width = 8, cache = CACHE, message = FALSE}
+plot_scatter_continuous("cci", c(vital_continuous_vars$var, lab_vars_t$var)) +
+  scale_x_continuous(breaks = sort(unique(train_data$cci))) +
+  theme(strip.text.x = element_text(size = 7))
 ```
 
 ## Table 1
@@ -567,7 +597,7 @@ train_data %>%
 varnames_to_remove <- c("race", "ethnicity", "bmi_cat", "hypunc", "hypc", 
                         "diabunc", "diabwc")
 
-all_varnames <- bind_rows(
+tbl1_varnames <- bind_rows(
   demographic_cat_vars,
   demographic_continuous_vars,
   comorbidity_cat_vars,
@@ -579,7 +609,7 @@ all_varnames <- bind_rows(
   filter(!var %in% varnames_to_remove) %>%
   pull(var)
 
-categorical_varnames <- bind_rows(
+tbl1_cat_varnames <- bind_rows(
   demographic_cat_vars,
   comorbidity_cat_vars,
   vital_cat_vars
@@ -587,7 +617,7 @@ categorical_varnames <- bind_rows(
   filter(!var %in% varnames_to_remove) %>%
   pull(var)
 
-non_normal_varnames <- c(
+tbl1_non_normal_varnames <- c(
   demographic_continuous_vars$var,
   vital_continuous_vars$var,
   comorbidity_continuous_vars$var,
@@ -595,25 +625,23 @@ non_normal_varnames <- c(
 )
   
 ## Create a TableOne object
-table1 <- train_data %>%
-  select(one_of(all_varnames, "died")) %>%
-  rename_with(get_var_labs, .cols = all_of(all_varnames)) %>%
+tbl1_train <- train_data %>%
+  select(one_of(tbl1_varnames, "died")) %>%
+  rename_with(get_var_labs, .cols = all_of(tbl1_varnames)) %>%
   rename(Survivor = died) %>%
-  CreateTableOne(vars = get_var_labs(all_varnames), 
-                 factorVars = get_var_labs(categorical_varnames), 
+  CreateTableOne(vars = get_var_labs(tbl1_varnames), 
+                 factorVars = get_var_labs(tbl1_cat_varnames), 
                  strata = "Survivor",  addOverall = TRUE, 
                  data = .)
 
 ## Print table 1
-print(table1, nonnormal = get_var_labs(non_normal_varnames),  
+print(tbl1_train, nonnormal = get_var_labs(tbl1_non_normal_varnames),  
       cramVars = c("Sex"),
       contDigits = 1, missing = TRUE, printToggle = FALSE) %>%
   set_colnames(c("Overall", "Survivor", "Non-survivor",
                 "p", "Test", "Missing")) %>%
   kable() %>%
   kable_styling()
-
-#summary(table1)
 ```
 
 ## Transformations of continuous variables
@@ -926,16 +954,7 @@ candidate_model_rhs <- make_rhs(get_included_vars())
 ```
 
 ## Missing data imputation
-Note that there is no "Other" geographic region as all 9 of the US geographic divisions are included in the data. We will consequently recode this category to missing. 
-
-```{r}
-train_data <- train_data %>%
-  mutate(division = ifelse(division == "Other", NA, division),
-         division = ifelse(division %in% c("East South Central", "Mountain"),
-                           "Other", division))
-```
-
-Let's re-level them so that we have preferred reference categories. 
+Let's re-level variables so that we have preferred reference categories. 
 
 ```{r}
 train_data <- train_data %>% mutate(
@@ -955,10 +974,12 @@ mice_out <- train_data %>%
   mutate_if(is.character, as.factor) %>%
   mice(m = n_imputations, maxit = 5) 
 
+## Save variables for test set imputation
+mice_vars <- c(get_included_vars(), "died")
+
 # Append datasets and add outcome
 mi_df <- complete(mice_out, action = "long", include = TRUE) %>%
-  as_tibble() %>%
-  mutate(died = rep(train_data$died, mice_out$m + 1))
+  as_tibble() 
 
 # To compare MICE to aregImpute
 # areg_out <-  aregImpute(update.formula(candidate_model_rhs, ~.), 
@@ -1157,8 +1178,8 @@ rename_terms <- function(v){
   return(v)
 }
 
-make_x <- function(data){
-  x <- model.matrix(candidate_model_rhs, data)
+make_x <- function(data, rhs){
+  x <- model.matrix(rhs, data)
   assign <- attr(x, "assign")
   colnames(x) <- rename_terms(colnames(x))
   x <- x[, -1]
@@ -1167,7 +1188,7 @@ make_x <- function(data){
 }
 
 # List of x and y for each imputed dataset
-x <- mi_list %>% map(make_x)
+x <- mi_list %>% map(function(data) make_x(data, candidate_model_rhs))
 y <- mi_list %>% map(function(x) x[["died"]])
 ```
 
@@ -1215,16 +1236,16 @@ for (i in 1:n_imputations){
   for (j in 1:n_rep){
     
     # Cross-validation
-    cv_fit <-  cv.oem(x = x[[i]], y = y[[i]], 
-                      penalty = "grp.lasso", 
-                      groups = groups, 
-                      family = "binomial",
-                      type.measure = "deviance",
-                      nfolds = n_folds
-                      )
+    oem_cvfit <- cv.oem(x = x[[i]], y = y[[i]], 
+                        penalty = "grp.lasso", 
+                        groups = groups, 
+                        family = "binomial",
+                        type.measure = "deviance",
+                        nfolds = n_folds
+                        )
   
     # Count nonzero coefficients 
-    inclusion_sim[cntr, which(coef_cv_oem(cv_fit) != 0)] <- 1
+    inclusion_sim[cntr, which(coef_cv_oem(oem_cvfit) != 0)] <- 1
     
     # Iterate
     cntr <- cntr + 1
@@ -1269,7 +1290,8 @@ Variables are included in the model based on the group Lasso simulation implemen
 ```{r}
 vars_to_exclude <- inclusion_summary %>%
   filter(prob < inclusion_threshold) %>%
-  pull(var)
+  pull(var) %>%
+  setdiff("sex") # Keep sex even if not picked by group lasso
 
 remove_terms_from_rhs <- function(f, vars_to_exclude){
   # First convert formula to string separated by +
@@ -1741,7 +1763,7 @@ bootprobs_age_sex_calendar %>%
     theme(legend.position = "bottom")
 ```
 
-# Model validation
+# Internal model validation
 ## Optimism-adjusted model performance
 We will start by using bootstrapping to estimate model performance and check for whether our in-sample fits are too optimistic. Specifically, we will use the following algorithm implemented in the `rms` package:
 
@@ -1762,6 +1784,8 @@ lrm_val_c <- validate(lrm_fit_c, B = n_boot_val)
 lrm_val_d <- validate(lrm_fit_d, B = n_boot_val)
 lrm_val_dc <- validate(lrm_fit_dc, B = n_boot_val)
 lrm_val_all <- validate(lrm_fit_all, B = n_boot_val) 
+lrm_val_train <- list(lrm_val_age, lrm_val_c, lrm_val_d,
+                      lrm_val_dc, lrm_val_all)
 ```
 
 ```{r}
@@ -1788,23 +1812,6 @@ make_validation_tbl <- function(object){
 make_validation_tbl(lrm_val_age)
 make_validation_tbl(lrm_val_c) 
 make_validation_tbl(lrm_val_all)
-```
-
-```{r}
-summarize_performance <- function(objects){
-  metrics <- c("Dxy", "R2", "B")
-  map_df(objects, function (x) x[metrics, "index.orig"],
-                .id = "Model") %>%
-    mutate(`C-index` = (Dxy + 1)/2) %>%
-    rename(`Brier score` = B, `R-Squared` = R2) %>%
-    select(-Dxy) %>%
-    kable(digits = 3) %>%
-    kable_styling()
-}
-
-list(lrm_val_age, lrm_val_c, lrm_val_d, lrm_val_dc, lrm_val_all) %>%
-  set_names(lrm_names) %>%
-  summarize_performance() 
 ```
 
 ## Calibration curves
@@ -1851,4 +1858,219 @@ plot_calibration <- function(object){
 plot_calibration(lrm_cal_list)
 ```
 
-## Performance on test set
+# Model validation on test set
+The specification of the model has been finalized so we are ready to assess it on the test set. 
+
+## Preprocess test data
+To make predictions on the training set, we must preprocess the data in the same way that we preprocessed the training data. Multiple imputation will be performed on the combined train and test set.
+
+```{r, cache = CACHE}
+test_data <- readRDS("test_data.rds")  %>%
+  filter_ie()
+
+# Clean data
+test_data <- clean_data(test_data)
+
+# Truncate labs
+test_data <- add_truncated_lab_vars(test_data, v = lab_vars$var)
+
+# Missing data imputation
+## rbind training and test sets
+train_data$set = "train"
+test_data$set = "test"
+train_test_data <- bind_rows(train_data, test_data)
+
+## Multiple imputation via MICE
+mice_train_test <- train_test_data %>%
+  select(one_of(mice_vars)) %>%
+  mutate_if(is.character, as.factor) %>%
+  mice(m = n_imputations, maxit = 5) 
+
+## Subset to test set
+mi_df_test <- complete(mice_train_test, action = "long", include = FALSE) %>%
+  as_tibble() %>%
+  mutate(set = rep(train_test_data$set, mice_train_test$m)) %>%
+  filter(set == "test")
+
+## Create race/ethnicity variable
+mi_df_test <-  add_race_ethnicity(mi_df_test)
+```
+
+Before making predictions, it is helpful to compare the training and test sets.
+
+```{r}
+tbl1_train_test <- train_test_data %>%
+  select(one_of("died", "set", tbl1_varnames)) %>%
+  rename_with(get_var_labs, .cols = all_of(tbl1_varnames)) %>%
+  rename(Died = died) %>%
+  mutate(set = ifelse(set == "train", "Train set", "Test set")) %>%
+  CreateTableOne(vars = c("Died", get_var_labs(tbl1_varnames)), 
+                 factorVars = c("Died", get_var_labs(tbl1_cat_varnames)), 
+                 strata = "set",  addOverall = TRUE, 
+                 data = .)
+
+print(tbl1_train_test, nonnormal = get_var_labs(tbl1_non_normal_varnames),  
+      cramVars = c("Sex"),
+      contDigits = 3, missing = TRUE, printToggle = FALSE) %>%
+  set_colnames(c("Overall", "Test set", "Train set",
+                "p", "Test", "Missing")) %>%
+  kable() %>%
+  kable_styling()
+```
+
+## Predict
+Our main predictions are based on the unpenalized logistic regression.
+```{r}
+lrm_fits <- list(age = lrm_fit_age, 
+                 c = lrm_fit_c,
+                 d = lrm_fit_d,
+                 dc = lrm_fit_dc,
+                 all= lrm_fit_all)
+lrm_prob_names <- paste0("lrm_probs_", names(lrm_fits))
+for (i in 1:length(lrm_fits)){
+  mi_df_test[[lrm_prob_names[i]]] <- predict(lrm_fits[[i]], 
+                                             newdata = as.data.frame(mi_df_test), 
+                                             type = "fitted", se.fit = FALSE)
+}
+```
+
+## Evaluation metrics
+```{r}
+lrm_val_test <- vector(mode = "list", length = length(lrm_fits))
+names(lrm_val_test) <- lrm_names
+for (i in 1:length(lrm_val_test)){
+  lrm_val_test[[i]] <- val.prob(p = mi_df_test[[lrm_prob_names[i]]],
+                                y = mi_df_test$died,
+                                pl = FALSE)
+}
+```
+
+```{r}
+summarize_val_probs <- function(object){
+  map_df(object, function (x) {
+  as_tibble(matrix(x, nrow = 1)) %>%
+    set_colnames(names(x))
+}, .id = "Model") %>%
+  kable(digits = 4) %>%
+  kable_styling() %>%
+  scroll_box(width = "100%")
+}
+summarize_val_probs(lrm_val_test)
+```
+
+```{r performanceSummary}
+summarize_performance <- function(val_train, val_test){
+  # Get metrics
+  train_metrics <- map_df(val_train, function (x) {
+    x[c("Dxy", "B"), "index.orig"]
+    }) %>%
+    mutate(Dxy = (Dxy + 1)/2) %>%
+    rename(c_index = Dxy)
+  
+  test_metrics <- map_df(val_test, function(x) x[c("C (ROC)", "Brier")])
+  
+  # Make table
+  bind_cols(
+    tibble(Model = names(val_test)),
+    train_metrics,
+    test_metrics
+  ) %>%
+    kable(col.names = c("Model", "C-Index", "Brier", "C-Index", "Brier"),
+          digits = 4) %>%
+    kable_styling() %>%
+    add_header_above(c(" ", "Train" = 2, "Test" = 2))
+}
+
+summarize_performance(val_train = lrm_val_train, val_test = lrm_val_test)
+```
+
+## Calibration curves
+```{r}
+plot_calibration_test <- function(data, p, model_names){
+  plot_data <- data[, c("died", ".imp", p)] %>%
+    pivot_longer(cols = c(p), names_to = "model",
+               values_to = "predicted") %>%
+    rename(actual = died) %>%
+    mutate(model = model_names[match(model, p)],
+          model = factor(model, levels = model_names))
+
+ggplot(plot_data, aes(x = predicted, y = actual)) +
+  facet_wrap(~model) +
+  geom_smooth(se = FALSE, method = "loess", formula = y ~ x, color = "black",
+              size = 1) +
+  geom_abline(intercept = 0, slope = 1, linetype = "dashed", color = "grey") +
+  scale_x_continuous(breaks = seq(0, 1, .2), limits = c(0, 1)) +
+  scale_y_continuous(breaks = seq(0, 1, .2), limits = c(0, 1)) +
+  xlab("Predicted probability") +
+  ylab("Actual probability") +
+  theme(legend.position = "bottom")
+}
+
+plot_calibration_test(mi_df_test, p = lrm_prob_names, model_names = lrm_names)
+```
+
+## Penalized models
+We will run sensitivity analyses on the full model to see if penalization can improve calibration and/or discrimination. The three models that we will consider are (i) logistic regression with a ridge penalty, (ii) logistic regression with a lasso penalty, and (iii) the standard upenalized logistic regression (i.e., from the results presented above).
+
+The penalized logistic regression models can be fit using `glmnet`. 
+
+```{r, cache = CACHE}
+x_train <- mi_list %>% map(function(data) 
+  make_x(data, model_rhs)
+)
+
+# Cross validation
+lasso_cvfits <- ridge_cvfits <-  vector(mode = "list", length = length(x_train))
+for (i in 1:length(glmnet_cvfits)){
+  ridge_cvfits[[i]] <- cv.glmnet(x = x_train[[i]], y = y[[i]], 
+                                 family = "binomial", alpha = 0)
+  lasso_cvfits[[i]] <- cv.glmnet(x = x_train[[i]], y = y[[i]], 
+                                 family = "binomial", alpha = 1)
+}
+```
+
+Now let's make predictions for the penalized models. The prediction for a given patient is the average prediction across the imputed datasets. 
+
+```{r}
+predict_glmnet_mi <- function(fits, newx){
+  n_fits <- length(fits)
+  pred <- matrix(NA, nrow = nrow(newx), ncol = n_fits)
+  for (j in 1:n_fits){
+    pred[, j] <- predict(fits[[i]], newx = x_test, 
+                         s = "lambda.1se", type = "response")
+  }
+  return(apply(pred, 1, mean)) 
+}
+
+x_test <- make_x(mi_df_test, model_rhs)
+mi_df_test$ridge_probs_all <- predict_glmnet_mi(ridge_cvfits, x_test)
+mi_df_test$lasso_probs_all <- predict_glmnet_mi(lasso_cvfits, x_test)
+```
+
+With predictions in hand, we can evaluate the model.
+
+```{r}
+penalized_val_test <- vector(mode = "list", length = 2)
+names(penalized_val_test) <- c("Lasso", "Ridge")
+penalized_prob_names <- paste0(c("lasso", "ridge"), "_probs_all")
+for (i in 1:length(penalized_val_test)){
+  penalized_val_test[[i]] <- val.prob(p = mi_df_test[[penalized_prob_names[i]]],
+                                      y = mi_df_test$died,
+                                      pl = FALSE)
+}  
+```
+
+We will first assess various evaluation metrics with an emphasis on the Brier score and C-Index.
+
+```{r}
+summarize_val_probs(penalized_val_test)
+```
+
+Finally, we will compare calibration curves for each of the three models.
+
+```{r, fig.height = 3, fig.width = 8}
+plot_calibration_test(mi_df_test,
+                      p = c(penalized_prob_names, "lrm_probs_all"),
+                      model_names = c(names(penalized_val_test), "No penalty"))
+```
+  
