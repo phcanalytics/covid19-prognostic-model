@@ -40,10 +40,10 @@ select <- dplyr::select
 # Settings
 set.seed(123)
 theme_set(theme_bw())
-n_imputations <- 2    # Number of multiple imputations with MICE
+n_imputations <- 5    # Number of multiple imputations with MICE
 n_boot_val <- 40      # Number of bootstraps with rms validation and calibration
 n_boot_probs <- 100   # Number of bootstraps for computing predicted probabilitiy CIs
-n_rep <- 2            # Number of repeats with grouped lasso
+n_rep <- 20           # Number of repeats with grouped lasso
 CACHE <- TRUE         # Whether to use cached results for long computations
 ```
 
