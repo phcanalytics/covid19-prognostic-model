@@ -2021,7 +2021,7 @@ x_train <- mi_list %>% map(function(data)
 
 # Cross validation
 lasso_cvfits <- ridge_cvfits <-  vector(mode = "list", length = length(x_train))
-for (i in 1:length(glmnet_cvfits)){
+for (i in 1:length(lasso_cvfits)){
   ridge_cvfits[[i]] <- cv.glmnet(x = x_train[[i]], y = y[[i]], 
                                  family = "binomial", alpha = 0)
   lasso_cvfits[[i]] <- cv.glmnet(x = x_train[[i]], y = y[[i]], 
