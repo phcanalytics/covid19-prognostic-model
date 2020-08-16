@@ -40,10 +40,10 @@ select <- dplyr::select
 # Settings
 set.seed(123)
 theme_set(theme_bw())
-n_imputations <- 5    # Number of multiple imputations with MICE
+n_imputations <- 2    # Number of multiple imputations with MICE
 n_boot_val <- 40      # Number of bootstraps with rms validation and calibration
 n_boot_probs <- 100   # Number of bootstraps for computing predicted probabilitiy CIs
-n_rep <- 20           # Number of repeats with grouped lasso
+n_rep <- 2           # Number of repeats with grouped lasso
 CACHE <- TRUE         # Whether to use cached results for long computations
 ```
 
@@ -970,16 +970,17 @@ We can now multiply impute data use MICE.
 ```{r, cache = CACHE}
 # Run MICE algorithm
 mice_out <- train_data %>%
-  select(c(one_of(get_included_vars()), "died")) %>%
+  select(c(one_of(get_included_vars()))) %>%
   mutate_if(is.character, as.factor) %>%
   mice(m = n_imputations, maxit = 5) 
 
 ## Save variables for test set imputation
-mice_vars <- c(get_included_vars(), "died")
+mice_vars <- c(get_included_vars())
 
-# Append datasets and add outcome
+# Append datasets and add death
 mi_df <- complete(mice_out, action = "long", include = TRUE) %>%
-  as_tibble() 
+  as_tibble() %>%
+  mutate(died = rep(train_data$died, mice_out$m + 1))
 
 # To compare MICE to aregImpute
 # areg_out <-  aregImpute(update.formula(candidate_model_rhs, ~.), 
@@ -1815,7 +1816,10 @@ make_validation_tbl(lrm_val_all)
 ```
 
 ## Calibration curves
-```{r calCurve, cache = CACHE, fig.width = 8, fig.height = 6}
+We will first use the bootstrap so that we can geneate bias adjusted predictions. 
+
+```{r calCurve, cache = CACHE}
+# Calibrate
 lrm_cal_age <- calibrate(lrm_fit_age, B = n_boot_val)
 lrm_cal_c <- calibrate(lrm_fit_c, B = n_boot_val)
 lrm_cal_d <- calibrate(lrm_fit_d, B = n_boot_val)
@@ -1823,7 +1827,11 @@ lrm_cal_dc <- calibrate(lrm_fit_dc, B = n_boot_val)
 lrm_cal_all <- calibrate(lrm_fit_all, B = n_boot_val)
 lrm_cal_list <- list(lrm_cal_age, lrm_cal_c, lrm_cal_d, lrm_cal_dc, lrm_cal_all)
 names(lrm_cal_list) <- lrm_names
+```
 
+Calibration plots can then be created.
+
+```{r, fig.width = 8, fig.height = 6}
 plot_calibration <- function(object){
   # Make tibble
   cal_df <- map2(object, names(object), function(x, y){
@@ -1858,6 +1866,46 @@ plot_calibration <- function(object){
 plot_calibration(lrm_cal_list)
 ```
 
+Calibration at the tails of the predictive distribution might be based on fewer patients, so it can be useful to plot the distribution of predicted probabilities. We start with histograms.
+
+```{r, fig.width = 8, fig.height = 6}
+predprobs_df <- map2(lrm_cal_list, names(lrm_cal_list), function (x, model_name){ 
+  x_df <- tibble(model =model_name, predicted = attr(x, "predicted"))
+  }) %>%
+   bind_rows() %>%
+  mutate(model = factor(model, levels = names(lrm_cal_list)))
+
+plot_predprobs_hist <- function(data){
+  ggplot(data, aes(x = predicted)) + 
+    facet_wrap(~model, scales = "free_y") +
+    geom_histogram(fill = "black", bins = 200) +
+    scale_x_continuous(limits = c(0, 1), breaks = seq(0, 1, by = 0.1)) +
+    scale_y_continuous(breaks = function (x) floor(seq(0, .9 * max(x), 
+                                                       length.out = 7))) +
+    xlab("Predicted Probability") +
+    ylab("Count") 
+}
+
+plot_predprobs_hist(predprobs_df)
+```
+
+The cumulative density function (CDF) is also informative since it provides the proportion of patients with predicted probabilities above and below given thresholds. For example, we can see that in the full model only a proportion `r formatC(1 - ecdf(predprobs_df[predprobs_df$model == "All variables", ]$predicted)(.5), format = "f", digits = 2)` have predicted probabilities above 0.5.
+
+```{r, fig.width = 8, fig.height = 6}
+plot_predprobs_cdf <- function(data){
+  ggplot(data, aes(x = predicted, col = model)) + 
+    stat_ecdf() +
+    scale_x_continuous(limits = c(0, 1), breaks = seq(0, 1, by = 0.1)) +
+    scale_y_continuous(breaks = seq(0, 1, by = 0.1)) +
+    xlab("Predicted Probability") +
+    ylab("CDF") +
+    scale_color_discrete(name = "") +
+    theme(legend.position = "bottom")
+}
+
+plot_predprobs_cdf(predprobs_df)
+```
+
 # Model validation on test set
 The specification of the model has been finalized so we are ready to assess it on the test set. 
 
@@ -1884,12 +1932,13 @@ train_test_data <- bind_rows(train_data, test_data)
 mice_train_test <- train_test_data %>%
   select(one_of(mice_vars)) %>%
   mutate_if(is.character, as.factor) %>%
-  mice(m = n_imputations, maxit = 5) 
+  mice(m = n_imputations, maxit = 5)
 
-## Subset to test set
+## Add death and subset to test set
 mi_df_test <- complete(mice_train_test, action = "long", include = FALSE) %>%
   as_tibble() %>%
-  mutate(set = rep(train_test_data$set, mice_train_test$m)) %>%
+  mutate(died = rep(train_test_data$died, mice_train_test$m),
+         set = rep(train_test_data$set, mice_train_test$m)) %>%
   filter(set == "test")
 
 ## Create race/ethnicity variable
@@ -1935,6 +1984,8 @@ for (i in 1:length(lrm_fits)){
 ```
 
 ## Evaluation metrics
+Let's evaluate the models using the metrics returned by `rms::val.prob()`.
+
 ```{r}
 lrm_val_test <- vector(mode = "list", length = length(lrm_fits))
 names(lrm_val_test) <- lrm_names
@@ -1957,6 +2008,8 @@ summarize_val_probs <- function(object){
 }
 summarize_val_probs(lrm_val_test)
 ```
+
+We will focus on the Brier score and C-Index and assess performance on both the training and test sets. 
 
 ```{r performanceSummary}
 summarize_performance <- function(val_train, val_test){
@@ -1985,28 +2038,44 @@ summarize_performance(val_train = lrm_val_train, val_test = lrm_val_test)
 ```
 
 ## Calibration curves
+Like we did with the training set, we will plot calibration curves. 
+
 ```{r}
-plot_calibration_test <- function(data, p, model_names){
-  plot_data <- data[, c("died", ".imp", p)] %>%
+make_cal_test_data <- function(data, p , model_names){
+  data[, c("died", ".imp", p)] %>%
     pivot_longer(cols = c(p), names_to = "model",
                values_to = "predicted") %>%
     rename(actual = died) %>%
     mutate(model = model_names[match(model, p)],
           model = factor(model, levels = model_names))
-
-ggplot(plot_data, aes(x = predicted, y = actual)) +
-  facet_wrap(~model) +
-  geom_smooth(se = FALSE, method = "loess", formula = y ~ x, color = "black",
-              size = 1) +
-  geom_abline(intercept = 0, slope = 1, linetype = "dashed", color = "grey") +
-  scale_x_continuous(breaks = seq(0, 1, .2), limits = c(0, 1)) +
-  scale_y_continuous(breaks = seq(0, 1, .2), limits = c(0, 1)) +
-  xlab("Predicted probability") +
-  ylab("Actual probability") +
-  theme(legend.position = "bottom")
 }
 
-plot_calibration_test(mi_df_test, p = lrm_prob_names, model_names = lrm_names)
+plot_calibration_test <- function(cal_data){
+  ggplot(cal_data, aes(x = predicted, y = actual)) +
+    facet_wrap(~model) +
+    geom_smooth(se = FALSE, method = "loess", formula = y ~ x, color = "black",
+                size = 1) +
+    geom_abline(intercept = 0, slope = 1, linetype = "dashed", color = "grey") +
+    scale_x_continuous(breaks = seq(0, 1, .2), limits = c(0, 1)) +
+    scale_y_continuous(breaks = seq(0, 1, .2), limits = c(0, 1)) +
+    xlab("Predicted probability") +
+    ylab("Actual probability") +
+    theme(legend.position = "bottom")
+}
+
+cal_test_data <- make_cal_test_data(mi_df_test, p = lrm_prob_names,
+                                    model_names = lrm_names)
+plot_calibration_test(cal_test_data)
+```
+
+It is again useful to visualize the distribution of predicted probabilities since calibration at the tails might be based on a smaller number of patients. 
+
+```{r, fig.width = 8, fig.height = 6}
+plot_predprobs_hist(cal_test_data)
+```
+
+```{r, fig.width = 8, fig.height = 6}
+plot_predprobs_cdf(cal_test_data)
 ```
 
 ## Penalized models
@@ -2069,8 +2138,9 @@ summarize_val_probs(penalized_val_test)
 Finally, we will compare calibration curves for each of the three models.
 
 ```{r, fig.height = 3, fig.width = 8}
-plot_calibration_test(mi_df_test,
-                      p = c(penalized_prob_names, "lrm_probs_all"),
-                      model_names = c(names(penalized_val_test), "No penalty"))
+make_cal_test_data(mi_df_test,
+                   p = c(penalized_prob_names, "lrm_probs_all"),
+                   model_names = c(names(penalized_val_test), "No penalty")) %>%
+  plot_calibration_test()
 ```
   
