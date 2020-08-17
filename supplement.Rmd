@@ -1699,27 +1699,23 @@ probs_calendar_time <- predict_mortality(
 kable(probs_calendar_time) %>% kable_styling()
 ```
 
-### Varying age, sex, and calendar time
+### Varying age and calendar time
 We will start by predicting point estimates only.
 
 ```{r}
-sex_to_vary <- unique(train_data$sex) %>%
-  .[!is.na(.)]
-
 # Predict point estimates
-probs_age_sex_calendar <- predict_mortality(
+probs_age_calendar <- predict_mortality(
   lrm_fit_all, newdata = train_sample, 
   vars_to_vary = list(age = ages_to_vary,
-                      sex = sex_to_vary,
                       calendar_time = calendar_times_to_vary))
 
 # Summarize in table
-probs_age_sex_calendar %>%
-  arrange(calendar_time, sex, age) %>%
+probs_age_calendar %>%
+  arrange(calendar_time, age) %>%
   mutate(Date = min_index_date + calendar_time) %>%
   select(-calendar_time) %>%
-  relocate(Date, sex) %>%
-  rename(`Sex` = sex, `Age` = age,
+  relocate(Date) %>%
+  rename(`Age` = age,
          `Mortality probability` = prob) %>%
   
   ## Using DT::datatable
@@ -1732,33 +1728,31 @@ probs_age_sex_calendar %>%
 We we will also compute 95% confidence intervals by bootstrapping.
 
 ```{r, message = FALSE, cache = CACHE}
-bootprobs_age_sex_calendar <- predict_mortality_boot(
+bootprobs_age_calendar <- predict_mortality_boot(
   lrm_fit_all, newdata = train_sample, 
   vars_to_vary = list(age = ages_to_vary,
-                      sex = sex_to_vary,
                       calendar_time = calendar_times_to_vary),
   B = n_boot_probs) 
 ```
 
 Let's plot the results.
 
-```{r predProbs, fig.height = 4, fig.width = 7}
-bootprobs_age_sex_calendar %>%
+```{r predProbs, fig.height = 5, fig.width = 6}
+bootprobs_age_calendar %>%
   # Summarize bootstrap results
-  group_by(age, sex, calendar_time) %>%
+  group_by(age, calendar_time) %>%
   summarise(
     prob_mean = mean(prob),
     prob_lower = quantile(prob, .025),
     prob_upper = quantile(prob, .975)
   ) %>%
-  mutate(date = min_index_date + calendar_time) %>%
+  mutate(date = factor(min_index_date + calendar_time)) %>%
 
   # Plot
-  ggplot(aes(x = age, y = prob_mean, color = sex, fill = sex)) +
-    geom_line() +
-    facet_wrap(~date) +
-    geom_line(aes(x = age, y = prob_lower, color = sex),  linetype = "dotted") +
-    geom_line(aes(x = age, y = prob_upper, color = sex),  linetype = "dotted") +
+  ggplot(aes(x = age, y = prob_mean)) +
+    geom_line(aes(color = date)) +
+    geom_ribbon(aes(ymin = prob_lower, ymax = prob_upper, fill = date),
+                alpha = 0.2) +
     xlab("Age") +
     ylab("Mortality probability") +
     scale_color_discrete("") +
