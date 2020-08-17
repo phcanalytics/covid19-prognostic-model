@@ -239,6 +239,7 @@ vital_continuous_vars <- tribble(
   "sbp", "Systolic blood pressure",
   "hr", "Heart rate",
   "resp", "Respiration rate",
+  "spo2", "Oxygen saturation",
   "temp", "Temperature",
 ) %>%
   mutate(group = "Vitals")
@@ -254,7 +255,6 @@ lab_vars <- tribble(
   "ldh", "Lactate dehydrogenase (LDH)",
   "lymphocyte", "Lymphocyte count",
   "neutrophil", "Neutrophil count",
-  "spo2", "Oxygen saturation",
   "pct", "Procalcitonin",
   "tni", "Troponin I",
   "plt", "Platelet count (PLT)",
@@ -598,13 +598,12 @@ varnames_to_remove <- c("race", "ethnicity", "bmi_cat", "hypunc", "hypc",
                         "diabunc", "diabwc")
 
 tbl1_varnames <- bind_rows(
-  demographic_cat_vars,
   demographic_continuous_vars,
-  comorbidity_cat_vars,
+  demographic_cat_vars %>% arrange(varlab),
+  comorbidity_cat_vars %>% arrange(varlab),
   comorbidity_continuous_vars,
-  vital_cat_vars,
-  vital_continuous_vars,
-  lab_vars
+  vital_continuous_vars %>% arrange(varlab),
+  lab_vars %>% arrange(varlab)
 ) %>%
   filter(!var %in% varnames_to_remove) %>%
   pull(var)
@@ -794,6 +793,11 @@ uv_hr <- evaluate_univariate_logit("hr")
 uv_resp <- evaluate_univariate_logit("resp")
 ```
 
+#### Oxygen saturation (%)
+```{r, fig.height = 5, fig.width = 7, message = FALSE}
+uv_spo2 <- evaluate_univariate_logit("spo2")
+```
+
 #### Temperature
 ```{r, fig.height = 5, fig.width = 7, message = FALSE}
 uv_temp <- evaluate_univariate_logit("temp")
@@ -881,11 +885,6 @@ uv_neutrophil <- evaluate_univariate_logit("neutrophil")
 uv_neutrophil_t <- evaluate_univariate_logit("neutrophil_t")
 ```
 
-#### Oxygen saturation (%)
-```{r, fig.height = 5, fig.width = 7, message = FALSE}
-uv_spo2 <- evaluate_univariate_logit("spo2")
-```
-
 #### Procalcitonin (ng/mL)
 ```{r, fig.height = 5, fig.width = 7, message = FALSE}
 uv_pct <- evaluate_univariate_logit("pct")
@@ -933,8 +932,8 @@ comorbidities_to_include <- comorbidity_cat_vars %>%
   filter(!var %in% c("diabunc", "diabwc", "hypunc", "hypc")) %>%
   pull(var) %>%
   c("diab", "hyp")
-vitals_to_include <- c("bmi", "temp", "hr", "resp", "sbp")
-labs_to_include <- c("spo2", "crp_t", "tni_t", "ast_t", "ferritin_t",
+vitals_to_include <- c("bmi", "temp", "hr", "resp", "spo2", "sbp")
+labs_to_include <- c("crp_t", "tni_t", "ast_t", "ferritin_t",
                      "creatinine_t", "ldh_t", "lymphocyte_t", "neutrophil_t",
                      "plt_t", "wbc_t")
 vars <- vars %>%
