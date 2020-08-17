@@ -40,10 +40,10 @@ select <- dplyr::select
 # Settings
 set.seed(123)
 theme_set(theme_bw())
-n_imputations <- 2    # Number of multiple imputations with MICE
+n_imputations <- 5    # Number of multiple imputations with MICE
 n_boot_val <- 40      # Number of bootstraps with rms validation and calibration
 n_boot_probs <- 100   # Number of bootstraps for computing predicted probabilitiy CIs
-n_rep <- 2           # Number of repeats with grouped lasso
+n_rep <- 20           # Number of repeats with grouped lasso
 CACHE <- TRUE         # Whether to use cached results for long computations
 ```
 
@@ -644,7 +644,7 @@ print(tbl1_train, nonnormal = get_var_labs(tbl1_non_normal_varnames),
   kable_styling()
 ```
 
-## Transformations of continuous variables
+## Transformations of continuous variables 
 The functional form of the relationship between mortality and the continuous variables is assessed using a series of univariate fits. We mainly rely on visual inspection of the graphs but also report the Bayesian information criterion (BIC).
 
 ```{r}
@@ -800,7 +800,7 @@ uv_temp <- evaluate_univariate_logit("temp")
 ```
 
 ### Labs
-#### Alanine aminotransferase (U/L)
+#### Alanine aminotransferase (U/L) {#transform-continuous-alt}
 ```{r, fig.height = 5, fig.width = 7, message = FALSE}
 uv_alt <- evaluate_univariate_logit("alt")
 ```
@@ -924,7 +924,7 @@ uv_wbc_t <- evaluate_univariate_logit("wbc_t")
 
 # Data preprocessing 
 ## Candidate variables for modeling
-Let's specify variables that will be candidates for our model and used during variable selection. We will combine race and ethnicity into a single variable, but will wait to do this until after multiple imputation (see next section). 
+Variables that will be candidates for inclusion in our model and used during variable selection are specified here. We will combine race and ethnicity into a single variable, but will wait to do this until after multiple imputation (see next section). Alanine aminotransferase (ALT) will also be exclued due to (i) a strong correlation with AST (`r formatC(cor(train_data$alt, train_data$ast, use = "complete.obs"), format = "f", digits = 2)`) and weak univariate associations with mortality (see [above](#transform-continuous-alt)).
 
 ```{r}
 demographics_to_include <- c("age", "sex", "race", "ethnicity", "division",
@@ -1568,8 +1568,9 @@ lrm_log_odds <- Predict(lrm_fit_all, ref.zero = TRUE)
 p_log_odds <- ggplot(lrm_log_odds, sepdiscrete = "list")
 
 # Continuous plot
-log_odds_limit <- max(ceiling(abs(p_log_odds$continuous$data$yhat)))
-log_odds_breaks <- seq(-log_odds_limit, log_odds_limit, 1)
+log_odds_limit <- max(ceiling(c(abs(p_log_odds$continuous$data$lower), 
+                                abs(p_log_odds$continuous$data$upper))))
+log_odds_breaks <- seq(-log_odds_limit, log_odds_limit, 2)
 p_log_odds_continuous <- p_log_odds$continuous$data %>%
   as_tibble() %>%
   mutate(varlab = get_var_labs(.predictor.)) %>%
@@ -1585,7 +1586,8 @@ p_log_odds_continuous <- p_log_odds$continuous$data %>%
         strip.text = element_text(size = 7))
 
 # Discrete plot
-log_odds_limit <- max(ceiling(abs(p_log_odds$discrete$data$yhat)))
+log_odds_limit <- max(ceiling(c(abs(p_log_odds$discrete$data$lower), 
+                                abs(p_log_odds$discrete$data$upper))))
 log_odds_breaks <- seq(-log_odds_limit, log_odds_limit, 1)
 p_log_odds_discrete <- p_log_odds$discrete$data %>%
   as_tibble() %>%
@@ -1603,7 +1605,7 @@ p_log_odds_discrete <- p_log_odds$discrete$data %>%
 
 # Combine plots
 grid.arrange(p_log_odds_discrete, p_log_odds_continuous,
-             heights = c(5, 5))
+             heights = c(4, 6))
 ```
 
 ## Predicted probabilities 
