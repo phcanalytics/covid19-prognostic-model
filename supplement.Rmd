@@ -10,7 +10,24 @@ output:
     code_folding: show
 ---
 
-# Dependencies and settings
+# Overview
+This document is the "Supplement" for the paper titled "Risk factors for mortality among hospitalized patients with COVID-19". It contains all tables and figures presented in the paper, as well as supplemental results. All code for the statistical analyses can be viewed in this document and are available at our [GitHub repository](https://github.com/phcanalytics/covid19-prognostic-model), but note that we are unfortunately not allowed to publicly share the data.
+
+The figures and tables in the main text are contained in the following sections:
+
+* **Table 1**: [Section 3.5](#table1)
+* **Figure 1**: [Section 6.5.1](#summary-or-full)
+* **Figure 2**: [Section 6.4](#variable-importance)
+* **Figure 3**: [Section 6.7.3](#pred-probs-age-time)
+* **Figure 4**: [Section 8.4](#calibration-test) (first plot) 
+* **Table 2**:  [Section 8.3](#evaluation-metrics-test)
+
+Analyses were run using the following `R` packages and settings.
+
+```{r, include=FALSE}
+knitr::opts_chunk$set(warning = FALSE, message = FALSE)
+```
+
 ```{r, warning = FALSE, message = FALSE}
 # R packages
 library("corrr") # 0.4.2
@@ -43,12 +60,12 @@ theme_set(theme_bw())
 n_imputations <- 5    # Number of multiple imputations with MICE
 n_boot_val <- 40      # Number of bootstraps with rms validation and calibration
 n_boot_probs <- 100   # Number of bootstraps for computing predicted probabilitiy CIs
-n_rep <- 20           # Number of repeats with grouped lasso
+n_rep <- 20           # Number of repeats with group lasso
 CACHE <- TRUE         # Whether to use cached results for long computations
 ```
 
 # Data
-We begin by loading the "training" dataset and restrict to (i) patients age 18 and older and (ii) with an index date more than 2 weeks prior to the data release. Note that we are not unfortunately allowed to publicly share this data.
+We begin by loading the "training" dataset and restrict to (i) patients age 18 and older and (ii) with an index date more than 2 weeks prior to the data release. We will also do a small amount of data "cleaning" and create nice labels for possible predictor variables.
 
 ## Load
 ```{r}
@@ -92,7 +109,7 @@ clean_data <- function(data){
   # Recoding
 data <- data %>% 
   mutate(
-    ## "died" in add_deaths() should be an integer
+    ## "died" should be an integer
     died = as.integer(died),
     
     ## Convert unknown or other/unknown to missing
@@ -279,7 +296,7 @@ get_var_labs <- function(v){
 ```
 
 # Preliminary data analysis
-Before starting modeling, it's a good idea to carefully inspect the data.
+Before starting modeling, we will carefully inspect the data. This includes (i) checking the sample size, (ii) inspecting the extent of missing data, (iii) checking the distributions of possible predictor variables (and of death) including presence of potential outliers, (iv) assessing colinearites through plots of bivariate relationships between predictors, (v) summarizing the distribution of variables with a "Table 1", and (vi) looking at univarite fits between death and the continuous predictors to assess potential non-linearites and the number of knots that should be included when using splines.  
 
 ## Sample size
 
@@ -591,7 +608,7 @@ plot_scatter_continuous("cci", c(vital_continuous_vars$var, lab_vars_t$var)) +
   theme(strip.text.x = element_text(size = 7))
 ```
 
-## Table 1
+## Table 1 {#table1}
 ```{r tableOne}
 # Select variables for table 1
 varnames_to_remove <- c("race", "ethnicity", "bmi_cat", "hypunc", "hypc", 
@@ -953,7 +970,7 @@ candidate_model_rhs <- make_rhs(get_included_vars())
 ```
 
 ## Missing data imputation
-Let's re-level variables so that we have preferred reference categories. 
+Imputation will be performed using multivariate imputation by chained equations (MICE). Before imputing, we will first re-level variables so that we have preferred reference categories. 
 
 ```{r}
 train_data <- train_data %>% mutate(
@@ -964,9 +981,9 @@ train_data <- train_data %>% mutate(
 )
 ```
 
-We can now multiply impute data use MICE.
+We can then impute using the `mice()` function.
 
-```{r, cache = CACHE}
+```{r, cache = CACHE, results = "hide"}
 # Run MICE algorithm
 mice_out <- train_data %>%
   select(c(one_of(get_included_vars()))) %>%
@@ -1049,6 +1066,8 @@ make_imp_df <- function(object){
 imp_df <- make_imp_df(mice_out)
 #imp_df <- make_imp_df(areg_out)
 ```
+
+Note that there are some differences for sex, but this is because there are very few (n = `sum(is.na(train_data$sex))`) observations with missing sex.
 
 ```{r, fig.height = 7, fig.width = 8}
 # Plot continuous variables
@@ -1137,7 +1156,9 @@ mi_list <- mi_df %>%
 ```
 
 # Variable selection
-The continuous variables in our model are transformed using restricted cubic splines with 3 knots.
+We select variables for inclusion in the model by repeatedly fitting a logistic regression with a group lasso penalty. Each group lasso model is trained using 10-fold cross validation to select a value of the penalty parameter, lambda. Coefficients are extracted from the fit with `lambda = 1se`; that is, the model with deviance within one standard error of the minimum deviance. This process was repeated $N$ times for each of the $M$ imputed datasets. Variables with non-zero coefficients in at least 90 percent of the $N \times M$ iterations were deemed suitable for inclusion in the model. 
+
+We now setup the group lasso model, which will be implemented with `oem`. The continuous variables are transformed using restricted cubic splines with 3 knots.
 
 ```{r}
 candidate_model_rhs <- candidate_model_rhs %>%
@@ -1207,7 +1228,7 @@ match_terms_to_vars <- function(t){
 }
 ```
 
-Finally, we run the grouped lasso.
+Finally, we repeatedly train the group lasso model with cross-validation.
 
 ```{r, cache = CACHE}
 # Number of folds for cross-validation
@@ -1223,14 +1244,14 @@ inclusion_sim <- matrix(0,  ncol = ncol(x[[1]]) + 1,
 # Groups
 groups <- attr(x[[1]], "assign") 
 
-# Convenience function to extract coefficients from Group-Lasso
+# Convenience function to extract coefficients from group-lasso
 coef_cv_oem <- function(object){
   coef <- object$oem.fit$beta$grp.lasso
   lse_ind <- which(object$lambda[[1]] == object$lambda.1se.models)
   return(coef[, lse_ind])
 }
 
-# Variable selection via Group-Lasso
+# Variable selection via group-lasso
 cntr <- 1
 for (i in 1:n_imputations){
   for (j in 1:n_rep){
@@ -1253,7 +1274,7 @@ for (i in 1:n_imputations){
 } # End imputation loop 
 ```
 
-Let's check the inclusion probabilities from the above repeated cross-validation steps.
+We can then plot the proportion of times that coefficients for each variable were nonzero.
 
 ```{r, fig.height = 6, fig.width = 7}
 # Percentage of simulations each term is included
@@ -1285,7 +1306,7 @@ ggplot(inclusion_summary,
 
 # Model interpretation
 ## Model terms and data
-Variables are included in the model based on the group Lasso simulation implemented above. 
+Variables are included in the model based on the group lasso simulation implemented above. 
 
 ```{r}
 vars_to_exclude <- inclusion_summary %>%
@@ -1320,7 +1341,7 @@ options(datadist = "dd")
 ```
 
 ## Fit
-As described in the paper, five models are fit that include the following predictors: (i) age only, (ii) comorbidities only, (iii) all demographics (and calendar time), and (iv) demographics (and calendar time) and comorbidities, and (v) all variables selected by the grouped lasso. 
+As described in the paper, five models are fit that include the following predictors: (i) age only, (ii) comorbidities only, (iii) all demographics (and calendar time), and (iv) demographics (and calendar time) and comorbidities, and (v) all variables selected by the group lasso. 
 
 ```{r}
 # The four models
@@ -1441,31 +1462,51 @@ heatmap_df %>%
         axis.title = element_blank()) 
 ```
 
-## Variable importance
-Variable importance is assessed with a Wald test using the `rms::anova()`.
+## Variable importance {#variable-importance}
+Variable importance is assessed with a Wald test using `rms::anova()`. 
 
 ```{r varImportance}
 # Compute variable important with Wald chi-square
 lrm_anova_all <- anova(lrm_fit_all)
 
 # Plot the result
-lrm_anova_all %>% 
+## Make data frame
+lrm_anova_all_df <- lrm_anova_all %>% 
   as_tibble() %>%
   mutate(var = gsub(" ", "", rownames(lrm_anova_all)),
          varlab = get_var_labs(var),
          value = as.double(`Chi-Square` - `d.f.`)) %>%
-  filter(!var %in% c("TOTAL", "Nonlinear", "TOTALNONLINEAR")) %>%
+  filter(!var %in% c("TOTAL", "Nonlinear", "TOTALNONLINEAR")) 
 
-  ggplot(aes(x = value, y = reorder(varlab, value))) +
+## Plot
+ggplot(lrm_anova_all_df, aes(x = value, y = reorder(varlab, value))) +
   geom_point() +
   theme(axis.title.y = element_blank()) +
   xlab(expression(chi^2-df)) 
 ```
 
+
+```{r}
+lrm_anova_all_df %>%
+  select(Variable = varlab, `Chi-Square`, `DF` = `d.f.`, 
+                   `Chi-Square - DF` = value, `P`)  %>%
+  arrange(desc(`Chi-Square - DF`)) %>%
+datatable(rownames = FALSE,
+          filter = "top",
+          extensions = "Buttons",
+          options = list(pageLength = 20,
+                         dom = "Bfrtip",
+                         buttons = list(list(extend = "copy"),
+                                        list(extend = "csv", filename= 'varimp')) 
+          )) %>%
+  formatRound(c("Chi-Square", "Chi-Square - DF", "P"),
+              3)
+```
+
 ## Summary of odds ratios
 The model is summarized with odds ratios using `rms::summary()`. We will start by assessing the full model. Next, since labs and vitals may themselves be "caused" by comorbidities, we will see how the odds ratios for the comorbidities change after dropping labs and vitals from the model. 
 
-### Full model
+### Full model {#summary-or-full}
 ```{r oddsRatio, fig.height = 6}
 lrm_summary_all <- summary(lrm_fit_all)
 
@@ -1677,7 +1718,7 @@ ggplot(probs_age, aes(x = `Age`, y = `Mortality probability`)) +
   geom_line() 
 ```
 
-### Varying calendar time
+### Varying calendar time {#pred-probs-age-time}
 ```{r}
 min_index_date <- min(train_data$index_date)
 calendar_times_to_vary <- c(as.Date("2020-03-01"), 
@@ -1771,7 +1812,7 @@ We will start by using bootstrapping to estimate model performance and check for
 3. Calculate "optimism" as $O = B^{-1} \sum_{b = 1}^B \theta_{b, train} - \theta_{b, test}$.
 4. Calculate optimism-adjusted performance as $\theta = \theta_{orig} - O$.
 
-A shrinkage factor can also be estimated within each bootstrap sample to gauge the extent of overfitting. This is done by fitting $g(Y) = \gamma_0 + \gamma_1 X\hat{\beta}$ where $X$ and $Y$ are the covariates and outcome, respectively, in the test sample (i.e., in step 2c) and $\hat{\beta}$ is estimating in the training sample (i.e., step 2b). If there is no overfitting, then $\gamma_0 = 0$ and $\gamma_1 = 1$; conversely, if there is overfitting, then $\gamma_1 < 1$ and $\gamma_0 \neq 1$ to compensate.  
+A shrinkage factor can also be estimated within each bootstrap sample to gauge the extent of overfitting. This is done by fitting $g(Y) = \gamma_0 + \gamma_1 X\hat{\beta}$ where $X$ and $Y$ are the covariates and outcome, respectively, in the test sample (i.e., in step 2c) and $\hat{\beta}$ is estimated in the training sample (i.e., step 2b). If there is no overfitting, then $\gamma_0 = 0$ and $\gamma_1 = 1$; conversely, if there is overfitting, then $\gamma_1 < 1$ and $\gamma_0 \neq 1$ to compensate.  
 
 
 ```{r, cache = CACHE}
@@ -1810,7 +1851,7 @@ make_validation_tbl(lrm_val_c)
 make_validation_tbl(lrm_val_all)
 ```
 
-## Calibration curves
+## Calibration curves {#calibration-test}
 We will first use the bootstrap so that we can geneate bias adjusted predictions. 
 
 ```{r calCurve, cache = CACHE}
@@ -1905,9 +1946,9 @@ plot_predprobs_cdf(predprobs_df)
 The specification of the model has been finalized so we are ready to assess it on the test set. 
 
 ## Preprocess test data
-To make predictions on the training set, we must preprocess the data in the same way that we preprocessed the training data. Multiple imputation will be performed on the combined train and test set.
+To make predictions on the training set, we must preprocess the data in the same way that we preprocessed the training data. 
 
-```{r, cache = CACHE}
+```{r}
 test_data <- readRDS("test_data.rds")  %>%
   filter_ie()
 
@@ -1916,7 +1957,11 @@ test_data <- clean_data(test_data)
 
 # Truncate labs
 test_data <- add_truncated_lab_vars(test_data, v = lab_vars$var)
+```
 
+Multiple imputation will be performed on the combined train and test set.
+
+```{r, cache = CACHE, results = "hide"}
 # Missing data imputation
 ## rbind training and test sets
 train_data$set = "train"
@@ -1978,7 +2023,7 @@ for (i in 1:length(lrm_fits)){
 }
 ```
 
-## Evaluation metrics
+## Evaluation metrics {#evaluation-metrics-test}
 Let's evaluate the models using the metrics returned by `rms::val.prob()`.
 
 ```{r}
@@ -2004,7 +2049,8 @@ summarize_val_probs <- function(object){
 summarize_val_probs(lrm_val_test)
 ```
 
-We will focus on the Brier score and C-Index and assess performance on both the training and test sets. 
+
+We will focus on the Brier score and C-Index and assess performance on both the training and test sets.
 
 ```{r performanceSummary}
 summarize_performance <- function(val_train, val_test){
