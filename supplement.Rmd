@@ -58,7 +58,7 @@ select <- dplyr::select
 set.seed(123)
 theme_set(theme_bw())
 n_imputations <- 5    # Number of multiple imputations with MICE
-n_boot_val <- 40      # Number of bootstraps with rms validation and calibration
+n_boot_val <- 50      # Number of bootstraps with rms validation and calibration
 n_boot_probs <- 100   # Number of bootstraps for computing predicted probabilitiy CIs
 n_rep <- 20           # Number of repeats with group lasso
 CACHE <- TRUE         # Whether to use cached results for long computations
@@ -1393,7 +1393,7 @@ lrm_fit_all
 ```
 
 ## Collinearity 
-Let's examine the extent to which our predictors are collinear: for categorical and continous variables, we use an anova model; for categorical and categorical variables, we use Cramer's V; and for continous and continous variables, we use spearman correlation. (Note that this takes a long time to run and could probablty be made more efficient.)
+Let's examine the extent to which our predictors are collinear: for categorical and continous variables, we use an anova model; for categorical and categorical variables, we use Cramer's V; and for continous and continous variables, we use spearman correlation. (Note that this takes a long time to run and could probably be made more efficient.)
 
 ```{r}
 ## from https://stackoverflow.com/questions/52554336/plot-the-equivalent-of-correlation-matrix-for-factors-categorical-data-and-mi
@@ -1507,6 +1507,8 @@ datatable(rownames = FALSE,
 The model is summarized with odds ratios using `rms::summary()`. We will start by assessing the full model. Next, since labs and vitals may themselves be "caused" by comorbidities, we will see how the odds ratios for the comorbidities change after dropping labs and vitals from the model. 
 
 ### Full model {#summary-or-full}
+The plot displays odds ratios and 95% confidence intervals for each variable in the full model. Note that odds ratios for continuous variables reflect a change from `upper:lower`. For example, the odds ratio for age (`75:49`) is for a change from age 49 to age 75.
+
 ```{r oddsRatio, fig.height = 6}
 lrm_summary_all <- summary(lrm_fit_all)
 
