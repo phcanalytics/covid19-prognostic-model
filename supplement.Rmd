@@ -24,7 +24,9 @@ The figures and tables in the main text are contained in the following sections:
 
 Analyses were run using the following `R` packages and settings.
 
-```{r, include=FALSE}
+```{r, include = FALSE}
+# So that it can be viewed on GitHub pages, render with:
+# rmarkdown::render(input = "supplement.Rmd", output_dir = "docs")
 knitr::opts_chunk$set(warning = FALSE, message = FALSE)
 ```
 

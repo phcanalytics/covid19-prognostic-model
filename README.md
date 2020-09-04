@@ -1,5 +1,2 @@
 #  Risk factors for mortality among hospitalized patients with COVID-19
-This repository contains code and output for the manuscript titled "Risk factors for mortality among hospitalized patients with COVID-19". 
-
-## Creating the Supplement
-So that the Supplement can be viewd on GitHub pages, it should be rendered with: `rmarkdown::render(input = "supplement.Rmd", output_dir = "docs")`
+This repository contains the "Supplement" for the manuscript titled "Risk factors for mortality among hospitalized patients with COVID-19". You can view it at https://phcanalytics.github.io/covid19-prognostic-model/supplement.html. It is an R Markdown document that contains all code and output for the manuscript as well as supplementary analyses. 
