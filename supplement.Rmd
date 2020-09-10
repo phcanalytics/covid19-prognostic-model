@@ -70,7 +70,7 @@ CACHE <- TRUE         # Whether to use cached results for long computations
 We begin by loading the "training" dataset and restrict to (i) patients age 18 and older and (ii) with an index date more than 2 weeks prior to the data release. We will also do a small amount of data "cleaning" and create nice labels for possible predictor variables.
 
 ## Load
-```{r}
+```{r, message = TRUE}
 filter_ie <- function(data){
   data1 <- data %>%
     filter(age >= 18) 
@@ -666,29 +666,39 @@ print(tbl1_train, nonnormal = get_var_labs(tbl1_non_normal_varnames),
 The functional form of the relationship between mortality and the continuous variables is assessed using a series of univariate fits. We mainly rely on visual inspection of the graphs but also report the Bayesian information criterion (BIC).
 
 ```{r}
-fit_univariate_logit <- function(var, data){
+tryNULL <- function(expr) {
+  res <- NULL
+  try(res <- expr)
+  return(res)
+}
+
+fit_univariate_logit <- function(var, data, spline){
   make_f <- function(rhs){
     as.formula(paste("died", rhs, sep =" ~ "))
   }
+  
   fit_logit <- function(f, data){
-    glm(f, family = "binomial", data = data)
+    lrm(f, data = data)
   }
   
   list(
     `Linear` = fit_logit(make_f(var), data),
-    `Spline 3 knots` = fit_logit(make_f(sprintf("ns(%s, 5)", var)), data),
-    `Spline 4 knots` = fit_logit(make_f(sprintf("ns(%s, 6)", var)), data),
-    `Spline 5 knots` = fit_logit(make_f(sprintf("ns(%s, 7)", var)), data)
+    `Spline 3 knots` = fit_logit(make_f(sprintf("rcs(%s, 3)", var)), data),
+    `Spline 4 knots` = fit_logit(make_f(sprintf("rcs(%s, 4)", var)), data),
+    `Spline 5 knots` = fit_logit(make_f(sprintf("rcs(%s, 5)", var)), data)
   )
 }
 
 predict_univariate_logit <- function(models, var, var_values, type = "response"){
   newdata <- data.frame(var = var_values)
   colnames(newdata) <- var
-  map_dfc(models,
-         function(x) predict(x, newdata = newdata, type = type)) %>%
-  mutate(var = var_values) %>%
-  pivot_longer(cols = names(models),
+  pred_df <- map_dfc(models, function(x) {
+    p <- tryNULL(predict(x, newdata = newdata, type = type))
+  }) 
+  model_names <- colnames(pred_df)
+  pred_df %>%
+    mutate(var = var_values) %>%
+    pivot_longer(cols = model_names,
                names_to = "Model",
                values_to = "y")
 }
@@ -717,12 +727,12 @@ plot_univariate_logit <- function(models, var, var_values, var_lab = "Variable",
   # Plotting data
   predicted_probs <- predict_univariate_logit(models, var, var_values, type = type)
   ylab <- switch(type,
-                 "link" = "Log odds",
-                 "response" = "Probability of death",
-                 stop("Type must be 'link' or 'response'")
+                 "lp" = "Log odds",
+                 "fitted" = "Probability of death",
+                 stop("Type must be 'lp' or 'fitted'")
   )
   binned_y <- bin_y(var, var_values)
-  if (type == "link"){
+  if (type == "lp"){
     binned_y$y <- ifelse(binned_y$y == 0, .001, binned_y$y)
     binned_y$y <- ifelse(binned_y$y == 1, .99, binned_y$y)
     binned_y$y <- qlogis(binned_y$y)
@@ -759,9 +769,9 @@ evaluate_univariate_logit <- function(var, print = TRUE){
   
   # Do evaluations
   fits <- fit_univariate_logit(var, data = train_data)
-  p_link <- plot_univariate_logit(fits, var, var_values, var_lab, type = "link")
-  p_probs <- plot_univariate_logit(fits, var, var_values, var_lab, type = "response")
-  bic <- sapply(fits, BIC)
+  p_link <- plot_univariate_logit(fits, var, var_values, var_lab, type = "lp")
+  p_probs <- plot_univariate_logit(fits, var, var_values, var_lab, type = "fitted")
+  bic <- unlist(lapply(fits, function(z) tryNULL(BIC(z))))
   
   # Print and return
   if (print){
@@ -772,6 +782,9 @@ evaluate_univariate_logit <- function(var, print = TRUE){
   return(list(fits = fits, p_link = p_link, p_probs = p_probs,
               bic = bic))
 }
+
+dd <- datadist(train_data)
+options(datadist = "dd")
 ```
 
 ### Demographics
@@ -869,7 +882,7 @@ uv_ferritin_t <- evaluate_univariate_logit("ferritin_t")
 ```
 
 #### Fibrin D-Dimer (ng/mL)
-```{r, fig.height = 5, fig.width = 7, message = FALSE}
+```{r, fig.height = 3, fig.width = 7, message = FALSE}
 uv_d_dimer <- evaluate_univariate_logit("d_dimer")
 ```
 
@@ -1169,7 +1182,7 @@ candidate_model_rhs <- candidate_model_rhs %>%
                        rcs(bmi, 3) - bmi +
                        rcs(temp, 3) - temp +
                        rcs(hr, 3) - hr +
-                       rcs(resp, 3) - resp +
+                       rcs(resp, 4) - resp +
                        rcs(sbp, 3) - sbp +
                        rcs(spo2, 3) - spo2 +
                        rcs(crp_t, 3) - crp_t +
@@ -1354,7 +1367,7 @@ lrm_names <- c("Age only",
                "All variables")
 
 ## (1): fit_age: Only includes age
-f_lrm_age <- died ~ age 
+f_lrm_age <- died ~ rcs(age, 3)
 lrm_fit_age <- fit.mult.impute(f_lrm_age, fitter = lrm, xtrans = mice_out, pr = FALSE,
                                x = TRUE, y = TRUE)
 
@@ -1952,7 +1965,7 @@ The specification of the model has been finalized so we are ready to assess it o
 ## Preprocess test data
 To make predictions on the training set, we must preprocess the data in the same way that we preprocessed the training data. 
 
-```{r}
+```{r, message = TRUE}
 test_data <- readRDS("test_data.rds")  %>%
   filter_ie()
 
