@@ -369,13 +369,13 @@ missing_df %>%
   geom_histogram(binwidth = .03, color = "white") +
   scale_x_continuous(breaks = seq(0, 1, .05)) +
   scale_y_continuous(n.breaks = 20) +
-  xlab("Proportion of covariates that are missing") +
+  xlab("Proportion of predictors that are missing") +
   ylab("Count") 
 ```
 
 ## Distributions
 
-### Covariates
+### Predictors
 #### Categorical
 ```{r, fig.height = 10, fig.width = 11}
 cat_var_df <-  train_data %>%
@@ -662,7 +662,7 @@ print(tbl1_train, nonnormal = get_var_labs(tbl1_non_normal_varnames),
   kable_styling()
 ```
 
-## Transformations of continuous variables 
+## Transformations of continuous variables {#variable-transformations} 
 The functional form of the relationship between mortality and the continuous variables is assessed using a series of univariate fits. We mainly rely on visual inspection of the graphs but also report the Bayesian information criterion (BIC).
 
 ```{r}
@@ -1666,7 +1666,9 @@ grid.arrange(p_log_odds_discrete, p_log_odds_continuous,
 ```
 
 ## Predicted probabilities 
-The predicted log odds plot is a nice way to summarize non-linear effects, but it's not the ultimate quantity of interest. We really care about predicted probabilities. But to compute a predicted probability we need to set all covariates in the model to certain values. Rather that choosing specific values (i.e., creating a representative patient), we will make predictions over a representative sample and average predictions across the sample. 
+The predicted log odds plot is a nice way to summarize non-linear effects, but it's not the ultimate quantity of interest. We really care about predicted probabilities. But to compute a predicted probability we need to set all predictor variables in the model to certain values. Rather that choosing specific values (i.e., creating a representative patient), we will make predictions over a representative sample and average predictions across the sample. 
+
+Note that these plots show the impact of changes in predictor variables *adjusted* for all other variables in the model. The impact of a change in age from 55 to 60 on the probability of mortality is, for instance, estimated after conditioning on the values of the laboratory results, vital signs, comorbidities, other demographics, and calendar time. To assess predicted probabilities without adjustment refer to the univariate fits in the [transformation of continuous variables section](#variable-transformations).
 
 ```{r}
 # Make newdata
@@ -1829,7 +1831,7 @@ We will start by using bootstrapping to estimate model performance and check for
 3. Calculate "optimism" as $O = B^{-1} \sum_{b = 1}^B \theta_{b, train} - \theta_{b, test}$.
 4. Calculate optimism-adjusted performance as $\theta = \theta_{orig} - O$.
 
-A shrinkage factor can also be estimated within each bootstrap sample to gauge the extent of overfitting. This is done by fitting $g(Y) = \gamma_0 + \gamma_1 X\hat{\beta}$ where $X$ and $Y$ are the covariates and outcome, respectively, in the test sample (i.e., in step 2c) and $\hat{\beta}$ is estimated in the training sample (i.e., step 2b). If there is no overfitting, then $\gamma_0 = 0$ and $\gamma_1 = 1$; conversely, if there is overfitting, then $\gamma_1 < 1$ and $\gamma_0 \neq 1$ to compensate.  
+A shrinkage factor can also be estimated within each bootstrap sample to gauge the extent of overfitting. This is done by fitting $g(Y) = \gamma_0 + \gamma_1 X\hat{\beta}$ where $X$ and $Y$ are the predictors and outcome, respectively, in the test sample (i.e., in step 2c) and $\hat{\beta}$ is estimated in the training sample (i.e., step 2b). If there is no overfitting, then $\gamma_0 = 0$ and $\gamma_1 = 1$; conversely, if there is overfitting, then $\gamma_1 < 1$ and $\gamma_0 \neq 1$ to compensate.  
 
 
 ```{r, cache = CACHE}
