@@ -1502,19 +1502,25 @@ ggplot(lrm_anova_all_df, aes(x = value, y = reorder(varlab, value))) +
 
 
 ```{r}
+my_datatable <- function(data, filename) {
+  datatable(
+    data,
+    rownames = FALSE,
+    filter = "top",
+    extensions = "Buttons",
+    options = list(pageLength = 20,
+                    dom = "Bfrtip",
+                    buttons = list(list(extend = "copy"),
+                                   list(extend = "csv", filename = filename)) 
+    ))
+}
+
 lrm_anova_all_df %>%
   select(Variable = varlab, `Chi-Square`, `DF` = `d.f.`, 
                    `Chi-Square - DF` = value, `P`)  %>%
   arrange(desc(`Chi-Square - DF`)) %>%
-datatable(rownames = FALSE,
-          filter = "top",
-          extensions = "Buttons",
-          options = list(pageLength = 20,
-                         dom = "Bfrtip",
-                         buttons = list(list(extend = "copy"),
-                                        list(extend = "csv", filename= 'varimp')) 
-          )) %>%
-  formatRound(c("Chi-Square", "Chi-Square - DF", "P"),
+  my_datatable(filename = "varimp") %>%
+  formatRound(c("Chi-Square", "Chi-Square - DF", "P"), 
               3)
 ```
 
@@ -1598,6 +1604,18 @@ ggplot(lrm_or_comp,
         legend.position = "bottom") +
   ylab("Odds ratio") +
   coord_flip()
+
+# Results in a table
+lrm_or_comp %>%
+  select(-term) %>%
+  rename(Term = termlab,
+         `Odds ratio` = or,
+         `Odds ratio (lower)` = or_lower,
+         `Odds ratio (upper)` = or_upper,
+         Model = model) %>%
+  my_datatable(filename = "coef_comp") %>%
+  formatRound(c("Odds ratio", "Odds ratio (lower)", "Odds ratio (upper)"),  
+                4)
 ```
 
 ## Predicted log odds
@@ -1725,10 +1743,8 @@ probs_age <- predict_mortality(lrm_fit_all, newdata = train_sample,
 ```
 
 ```{r}
-# Table using DT package
-datatable(probs_age, 
-          rownames = FALSE,
-          options = list(pageLength = 20)) %>%
+# Table 
+my_datatable(probs_age, filename = "mortprob_by_age") %>%
   formatRound("Mortality probability", 4)
 ```
 
@@ -1776,11 +1792,7 @@ probs_age_calendar %>%
   relocate(Date) %>%
   rename(`Age` = age,
          `Mortality probability` = prob) %>%
-  
-  ## Using DT::datatable
-  datatable(rownames = FALSE,
-            filter = "top",
-          options = list(pageLength = 20)) %>%
+  my_datatable(filename = "mortprob_by_age_time") %>%
   formatRound("Mortality probability", 4)
 ```
 
