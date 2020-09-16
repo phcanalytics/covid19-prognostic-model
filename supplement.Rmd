@@ -1452,7 +1452,7 @@ mixed_assoc <- function(df, cor_method = "spearman", adjust_cramersv_bias = TRUE
 }
 ```
 
-```{r, cache = CACHE, eval = FALSE}
+```{r, cache = CACHE, eval = TRUE, fig.height = 8}
 # Create correlation matrix of associations
 corr_mat <- mi_df %>% 
   filter(.imp == 1) %>% 
