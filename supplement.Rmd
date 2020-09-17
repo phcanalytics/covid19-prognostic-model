@@ -62,8 +62,8 @@ theme_set(theme_bw())
 n_imputations <- 5    # Number of multiple imputations with MICE
 n_boot_val <- 50      # Number of bootstraps with rms validation and calibration
 n_boot_probs <- 100   # Number of bootstraps for computing predicted probabilitiy CIs
-n_rep <- 20           # Number of repeats with group lasso
-CACHE <- TRUE         # Whether to use cached results for long computations
+n_rep <- 20           # Number of repeats with group lasso (for each of the n_imputations)
+CACHE <- FALSE        # Whether to use cached results for long computations
 ```
 
 # Data
