@@ -61,9 +61,9 @@ set.seed(123)
 theme_set(theme_bw())
 n_imputations <- 5    # Number of multiple imputations with MICE
 n_boot_val <- 50      # Number of bootstraps with rms validation and calibration
-n_boot_probs <- 100   # Number of bootstraps for computing predicted probabilitiy CIs
+n_boot_probs <- 100   # Number of bootstraps for computing predicted probability CIs
 n_rep <- 20           # Number of repeats with group lasso (for each of the n_imputations)
-CACHE <- FALSE        # Whether to use cached results for long computations
+CACHE <- TRUE         # Whether to use cached results for long computations
 ```
 
 # Data
@@ -298,7 +298,7 @@ get_var_labs <- function(v){
 ```
 
 # Preliminary data analysis
-Before starting modeling, we will carefully inspect the data. This includes (i) checking the sample size, (ii) inspecting the extent of missing data, (iii) checking the distributions of possible predictor variables (and of death) including presence of potential outliers, (iv) assessing colinearites through plots of bivariate relationships between predictors, (v) summarizing the distribution of variables with a "Table 1", and (vi) looking at univarite fits between death and the continuous predictors to assess potential non-linearites and the number of knots that should be included when using splines.  
+Before starting modeling, we will carefully inspect the data. This includes (i) checking the sample size, (ii) inspecting the extent of missing data, (iii) checking the distributions of possible predictor variables (and of death) including presence of potential outliers, (iv) assessing collinearities through plots of bivariate relationships between predictors, (v) summarizing the distribution of variables with a "Table 1", and (vi) looking at univariate fits between death and the continuous predictors to assess potential non-linearities and the number of knots that should be included when using splines.  
 
 ## Sample size
 
@@ -955,7 +955,7 @@ uv_wbc_t <- evaluate_univariate_logit("wbc_t")
 
 # Data preprocessing 
 ## Candidate variables for modeling
-Variables that will be candidates for inclusion in our model and used during variable selection are specified here. We will combine race and ethnicity into a single variable, but will wait to do this until after multiple imputation (see next section). Alanine aminotransferase (ALT) will also be exclued due to (i) a strong correlation with AST (`r formatC(cor(train_data$alt, train_data$ast, use = "complete.obs"), format = "f", digits = 2)`) and weak univariate associations with mortality (see [above](#transform-continuous-alt)).
+Variables that will be candidates for inclusion in our model and used during variable selection are specified here. We will combine race and ethnicity into a single variable, but will wait to do this until after multiple imputation (see next section). Alanine aminotransferase (ALT) will also be excluded due to (i) a strong correlation with AST (`r formatC(cor(train_data$alt, train_data$ast, use = "complete.obs"), format = "f", digits = 2)`) and weak univariate associations with mortality (see [above](#transform-continuous-alt)).
 
 ```{r}
 demographics_to_include <- c("age", "sex", "race", "ethnicity", "division",
@@ -1408,7 +1408,7 @@ lrm_fit_all
 ```
 
 ## Collinearity 
-Let's examine the extent to which our predictors are collinear: for categorical and continous variables, we use an anova model; for categorical and categorical variables, we use Cramer's V; and for continous and continous variables, we use spearman correlation. (Note that this takes a long time to run and could probably be made more efficient.)
+Let's examine the extent to which our predictors are collinear: for categorical and continuous variables, we use an anova model; for categorical and categorical variables, we use Cramer's V; and for continuous and continuous variables, we use spearman correlation. (Note that this takes a long time to run and could probably be made more efficient.)
 
 ```{r}
 ## from https://stackoverflow.com/questions/52554336/plot-the-equivalent-of-correlation-matrix-for-factors-categorical-data-and-mi
@@ -1619,7 +1619,7 @@ lrm_or_comp %>%
 ```
 
 ## Predicted log odds
-One limitation of the odds ratio plots is that it is hard to examine the potentially non-linear relationships between mortality and the continuous variable. The `rms::Predict()` function is especially helpul in this regard. We use it to vary all of the predictors and plot predicted log odds across the different values of each predictor. 
+One limitation of the odds ratio plots is that it is hard to examine the potentially non-linear relationships between mortality and the continuous variable. The `rms::Predict()` function is especially helpful in this regard. We use it to vary all of the predictors and plot predicted log odds across the different values of each predictor. 
 
 Each prediction is made with all other variables at their "Adjust to" value as specified with `datadist()` above.
 
@@ -1883,7 +1883,7 @@ make_validation_tbl(lrm_val_all)
 ```
 
 ## Calibration curves {#calibration-test}
-We will first use the bootstrap so that we can geneate bias adjusted predictions. 
+We will first use the bootstrap so that we can generate bias adjusted predictions. 
 
 ```{r calCurve, cache = CACHE}
 # Calibrate
@@ -2151,7 +2151,7 @@ plot_predprobs_cdf(cal_test_data)
 ```
 
 ## Penalized models
-We will run sensitivity analyses on the full model to see if penalization can improve calibration and/or discrimination. The three models that we will consider are (i) logistic regression with a ridge penalty, (ii) logistic regression with a lasso penalty, and (iii) the standard upenalized logistic regression (i.e., from the results presented above).
+We will run sensitivity analyses on the full model to see if penalization can improve calibration and/or discrimination. The three models that we will consider are (i) logistic regression with a ridge penalty, (ii) logistic regression with a lasso penalty, and (iii) the standard unpenalized logistic regression (i.e., from the results presented above).
 
 The penalized logistic regression models can be fit using `glmnet`. 
 
