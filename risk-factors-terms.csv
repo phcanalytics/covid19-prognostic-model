@@ -51,6 +51,7 @@ hr,hr,Heart rate,hr
 hr',hr',Heart rate',hr
 resp,resp,Respiration rate,resp
 resp',resp',Respiration rate',resp
+resp'',resp'',Respiration rate'',resp
 temp,temp,Temperature,temp
 temp',temp',Temperature',temp
 spo2,spo2,Oxygen saturation,spo2

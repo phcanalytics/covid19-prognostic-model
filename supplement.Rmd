@@ -33,7 +33,6 @@ knitr::opts_chunk$set(warning = FALSE, message = FALSE)
 ```{r, warning = FALSE, message = FALSE}
 # R packages
 library("corrr") # 0.4.2
-library("cowplot") # 1.0.0
 library("dplyr") # 1.0.0
 library("DT") #0.14
 library("ggplot2") # 3.3.1
@@ -44,7 +43,6 @@ library("knitr") # 1.28
 library("kableExtra") # 1.1.0
 library("magrittr") # 1.5
 library("mice") # 3.9.0
-library("pROC") # 1.16.2
 library("purrr") # 0.3.4
 library("rcompanion") # 2.3.25
 library("rms") # 6.0.1
@@ -63,7 +61,7 @@ n_imputations <- 5    # Number of multiple imputations with MICE
 n_boot_val <- 50      # Number of bootstraps with rms validation and calibration
 n_boot_probs <- 100   # Number of bootstraps for computing predicted probability CIs
 n_rep <- 20           # Number of repeats with group lasso (for each of the n_imputations)
-CACHE <- TRUE         # Whether to use cached results for long computations
+CACHE <- FALSE         # Whether to use cached results for long computations
 ```
 
 # Data
