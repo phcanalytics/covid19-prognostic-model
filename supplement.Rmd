@@ -11,7 +11,7 @@ output:
 ---
 
 # Overview
-This document is the "Supplement" for the paper titled "Risk factors for mortality among hospitalized patients with COVID-19". It contains all tables and figures presented in the paper, as well as supplemental results. All code for the statistical analyses can be viewed in this document and are available at our [GitHub repository](https://github.com/phcanalytics/covid19-prognostic-model), but note that we are unfortunately not allowed to publicly share the data.
+This document is the "Supplement" for the paper titled ["Risk factors for mortality among hospitalized patients with COVID-19"](https://www.medrxiv.org/content/10.1101/2020.09.22.20196204v1). It contains all tables and figures presented in the paper, as well as supplemental results. All code for the statistical analyses can be viewed in this document and are available at our [GitHub repository](https://github.com/phcanalytics/covid19-prognostic-model), but note that we are unfortunately not allowed to publicly share the data.
 
 The figures and tables in the main text are contained in the following sections:
 
@@ -27,6 +27,7 @@ Analyses were run using the following `R` packages and settings.
 ```{r, include = FALSE}
 # So that it can be viewed on GitHub pages, render with:
 # rmarkdown::render(input = "supplement.Rmd", output_dir = "docs")
+# To clear cache, delete the `supplement_cache` directory
 knitr::opts_chunk$set(warning = FALSE, message = FALSE)
 ```
 
@@ -34,7 +35,7 @@ knitr::opts_chunk$set(warning = FALSE, message = FALSE)
 # R packages
 library("corrr") # 0.4.2
 library("dplyr") # 1.0.0
-library("DT") #0.14
+library("DT") # 0.14
 library("ggplot2") # 3.3.1
 library("glmnet") # 4.0-2
 library("oem") # 2.0.10
@@ -61,7 +62,6 @@ n_imputations <- 5    # Number of multiple imputations with MICE
 n_boot_val <- 50      # Number of bootstraps with rms validation and calibration
 n_boot_probs <- 100   # Number of bootstraps for computing predicted probability CIs
 n_rep <- 20           # Number of repeats with group lasso (for each of the n_imputations)
-CACHE <- FALSE         # Whether to use cached results for long computations
 ```
 
 # Data
@@ -562,7 +562,7 @@ ggplot(train_data, aes_string(x = "age", y = "cci")) +
 
 Next, we will examine each comorbidity separately by plotting the probability that a patient has each comorbidity as a function of their age.
 
-```{r, fig.height = 10, fig.width = 8, cache = CACHE, message = FALSE}
+```{r, fig.height = 10, fig.width = 8, cache = TRUE, message = FALSE}
 train_data[, c("age", comorbidity_cat_vars$var)] %>%
   pivot_longer(cols = comorbidity_cat_vars$var,
                names_to = "comorbidity") %>%
@@ -578,7 +578,7 @@ train_data[, c("age", comorbidity_cat_vars$var)] %>%
 ```
 
 ### Age and vitals
-```{r, cache = CACHE, message = FALSE, fig.height = 5, fig.width = 8}
+```{r, cache = TRUE, message = FALSE, fig.height = 5, fig.width = 8}
 plot_scatter_continuous <- function(x_var, y_vars){
   train_data[, c(x_var, y_vars)] %>%
     pivot_longer(cols = all_of(y_vars)) %>%
@@ -596,13 +596,13 @@ plot_scatter_continuous("age", vital_continuous_vars$var)
 ```
 
 ### Age and labs
-```{r, message = FALSE, cache = CACHE, fig.height = 8, fig.width = 8}
+```{r, message = FALSE, cache = TRUE, fig.height = 8, fig.width = 8}
 plot_scatter_continuous("age", lab_vars_t$var) +
    theme(strip.text.x = element_text(size = 7))
 ```
 
 ### Comorbidities and labs/vitals
-```{r, fig.height = 10, fig.width = 8, cache = CACHE, message = FALSE}
+```{r, fig.height = 10, fig.width = 8, cache = TRUE, message = FALSE}
 plot_scatter_continuous("cci", c(vital_continuous_vars$var, lab_vars_t$var)) +
   scale_x_continuous(breaks = sort(unique(train_data$cci))) +
   theme(strip.text.x = element_text(size = 7))
@@ -996,7 +996,7 @@ train_data <- train_data %>% mutate(
 
 We can then impute using the `mice()` function.
 
-```{r, cache = CACHE, results = "hide"}
+```{r, cache = TRUE, results = "hide"}
 # Run MICE algorithm
 mice_out <- train_data %>%
   select(c(one_of(get_included_vars()))) %>%
@@ -1161,7 +1161,7 @@ candidate_model_rhs <- make_rhs(get_included_vars())
 
 Finally, we will (i) add the new race/ethnicity variable to the "MICE" object and (ii) create a list of imputed datasets for analysis.
 
-```{r, cache = CACHE}
+```{r, cache = TRUE}
 mice_out <- as.mids(mi_df)
 mi_list <- mi_df %>% 
   filter(.imp > 0) %>% 
@@ -1243,7 +1243,7 @@ match_terms_to_vars <- function(t){
 
 Finally, we repeatedly train the group lasso model with cross-validation.
 
-```{r, cache = CACHE}
+```{r, cache = TRUE}
 # Number of folds for cross-validation
 n_folds <- 10
 
@@ -1450,7 +1450,7 @@ mixed_assoc <- function(df, cor_method = "spearman", adjust_cramersv_bias = TRUE
 }
 ```
 
-```{r, cache = CACHE, eval = TRUE, fig.height = 8}
+```{r, cache = TRUE, eval = TRUE, fig.height = 8}
 # Create correlation matrix of associations
 corr_mat <- mi_df %>% 
   filter(.imp == 1) %>% 
@@ -1796,7 +1796,7 @@ probs_age_calendar %>%
 
 We we will also compute 95% confidence intervals by bootstrapping.
 
-```{r, message = FALSE, cache = CACHE}
+```{r, message = FALSE, cache = TRUE}
 bootprobs_age_calendar <- predict_mortality_boot(
   lrm_fit_all, newdata = train_sample, 
   vars_to_vary = list(age = ages_to_vary,
@@ -1844,7 +1844,7 @@ We will start by using bootstrapping to estimate model performance and check for
 A shrinkage factor can also be estimated within each bootstrap sample to gauge the extent of overfitting. This is done by fitting $g(Y) = \gamma_0 + \gamma_1 X\hat{\beta}$ where $X$ and $Y$ are the predictors and outcome, respectively, in the test sample (i.e., in step 2c) and $\hat{\beta}$ is estimated in the training sample (i.e., step 2b). If there is no overfitting, then $\gamma_0 = 0$ and $\gamma_1 = 1$; conversely, if there is overfitting, then $\gamma_1 < 1$ and $\gamma_0 \neq 1$ to compensate.  
 
 
-```{r, cache = CACHE}
+```{r, cache = TRUE}
 lrm_val_age <- validate(lrm_fit_age, B = n_boot_val)
 lrm_val_c <- validate(lrm_fit_c, B = n_boot_val) 
 lrm_val_d <- validate(lrm_fit_d, B = n_boot_val)
@@ -1883,7 +1883,7 @@ make_validation_tbl(lrm_val_all)
 ## Calibration curves {#calibration-test}
 We will first use the bootstrap so that we can generate bias adjusted predictions. 
 
-```{r calCurve, cache = CACHE}
+```{r calCurve, cache = TRUE}
 # Calibrate
 lrm_cal_age <- calibrate(lrm_fit_age, B = n_boot_val)
 lrm_cal_c <- calibrate(lrm_fit_c, B = n_boot_val)
@@ -1990,7 +1990,7 @@ test_data <- add_truncated_lab_vars(test_data, v = lab_vars$var)
 
 Multiple imputation will be performed on the combined train and test set.
 
-```{r, cache = CACHE, results = "hide"}
+```{r, cache = TRUE, results = "hide"}
 # Missing data imputation
 ## rbind training and test sets
 train_data$set = "train"
@@ -2153,7 +2153,7 @@ We will run sensitivity analyses on the full model to see if penalization can im
 
 The penalized logistic regression models can be fit using `glmnet`. 
 
-```{r, cache = CACHE}
+```{r, cache = TRUE}
 x_train <- mi_list %>% map(function(data) 
   make_x(data, model_rhs)
 )
