@@ -1,5 +1,5 @@
 ---
-title: 'Supplement: Risk factors for mortality among hospitalized patients with COVID-19'
+title: 'Supplementary material: Risk factors for mortality among hospitalized patients with COVID-19'
 date: "`r Sys.Date()`"
 output: 
   html_document:
@@ -11,7 +11,7 @@ output:
 ---
 
 # Overview
-This document is the "Supplement" for the paper titled ["Risk factors for mortality among hospitalized patients with COVID-19"](https://www.medrxiv.org/content/10.1101/2020.09.22.20196204v1). It contains all tables and figures presented in the paper, as well as supplemental results. All code for the statistical analyses can be viewed in this document and are available at our [GitHub repository](https://github.com/phcanalytics/covid19-prognostic-model), but note that we are unfortunately not allowed to publicly share the data.
+This document contains supplementary material for the paper titled ["Risk factors for mortality among hospitalized patients with COVID-19"](https://www.medrxiv.org/content/10.1101/2020.09.22.20196204v1). It contains all tables and figures presented in the paper, as well as supplemental results. All code for the statistical analyses can be viewed in this document and are available at our [GitHub repository](https://github.com/phcanalytics/covid19-prognostic-model), but note that we are unfortunately not allowed to publicly share the data.
 
 The figures and tables in the main text are contained in the following sections:
 
@@ -843,7 +843,7 @@ uv_alt <- evaluate_univariate_logit("alt")
 uv_alt_t <- evaluate_univariate_logit("alt_t")
 ```
 
-#### Alanine aminotransferase (U/L)
+#### Aspartate  aminotransferase (U/L)
 ```{r, fig.height = 5, fig.width = 7, message = FALSE}
 uv_ast <- evaluate_univariate_logit("ast")
 ```
@@ -1880,7 +1880,7 @@ make_validation_tbl(lrm_val_c)
 make_validation_tbl(lrm_val_all)
 ```
 
-## Calibration curves {#calibration-test}
+## Calibration curves {#calibration-train}
 We will first use the bootstrap so that we can generate bias adjusted predictions. 
 
 ```{r calCurve, cache = TRUE}
@@ -2107,7 +2107,7 @@ summarize_performance <- function(val_train, val_test){
 summarize_performance(val_train = lrm_val_train, val_test = lrm_val_test)
 ```
 
-## Calibration curves
+## Calibration curves {#calibration-test}
 Like we did with the training set, we will plot calibration curves. 
 
 ```{r}
@@ -2214,3 +2214,7 @@ make_cal_test_data(mi_df_test,
   plot_calibration_test()
 ```
   
+# Session information
+```{r}
+sessionInfo()
+```
