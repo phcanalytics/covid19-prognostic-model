@@ -33,24 +33,24 @@ knitr::opts_chunk$set(warning = FALSE, message = FALSE)
 
 ```{r, warning = FALSE, message = FALSE}
 # R packages
-library("corrr") # 0.4.2
-library("dplyr") # 1.0.0
-library("DT") # 0.14
-library("ggplot2") # 3.3.1
-library("glmnet") # 4.0-2
-library("oem") # 2.0.10
-library("gridExtra") # 2.3
-library("knitr") # 1.28
-library("kableExtra") # 1.1.0
-library("magrittr") # 1.5
-library("mice") # 3.9.0
-library("purrr") # 0.3.4
-library("rcompanion") # 2.3.25
-library("rms") # 6.0.1
-library("splines") # base
-library("tableone") # 12.0.0
-library("tibble") # 3.0.1
-library("tidyr") # 1.1.0
+library("corrr") 
+library("dplyr") 
+library("DT") 
+library("ggplot2") 
+library("glmnet") 
+library("oem") 
+library("gridExtra") 
+library("knitr") 
+library("kableExtra") 
+library("magrittr") 
+library("mice") 
+library("purrr") 
+library("rcompanion") 
+library("rms") 
+library("splines") 
+library("tableone") 
+library("tibble") 
+library("tidyr") 
 
 # Namespace clash
 select <- dplyr::select
