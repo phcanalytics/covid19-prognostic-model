@@ -1,5 +1,5 @@
 ---
-title: 'Supplementary material: Risk factors for mortality among hospitalized patients with COVID-19'
+title: 'Supplemental file 2: Prognostic model to identify and quantify risk factors for mortality among hospitalised patients with COVID-19 in the USA'
 date: "`r Sys.Date()`"
 output: 
   html_document:
@@ -11,7 +11,7 @@ output:
 ---
 
 # Overview
-This document contains supplementary material for the paper titled ["Risk factors for mortality among hospitalized patients with COVID-19"](https://www.medrxiv.org/content/10.1101/2020.09.22.20196204v1). It contains all tables and figures presented in the paper, as well as supplemental results. All code for the statistical analyses can be viewed in this document and are available at our [GitHub repository](https://github.com/phcanalytics/covid19-prognostic-model), but note that we are unfortunately not allowed to publicly share the data.
+This document contains supplementary material for the paper titled "Prognostic model to identify and quantify risk factors for mortality among hospitalised patients with COVID-19 in the USA". It contains all tables and figures presented in the paper, as well as supplemental results. All code for the statistical analyses can be viewed in this document and are available at our [GitHub repository](https://github.com/phcanalytics/covid19-prognostic-model), but note that we are unfortunately not allowed to publicly share the data.
 
 The figures and tables in the main text are contained in the following sections:
 
@@ -33,24 +33,24 @@ knitr::opts_chunk$set(warning = FALSE, message = FALSE)
 
 ```{r, warning = FALSE, message = FALSE}
 # R packages
-library("corrr") # 0.4.2
-library("dplyr") # 1.0.0
-library("DT") # 0.14
-library("ggplot2") # 3.3.1
-library("glmnet") # 4.0-2
-library("oem") # 2.0.10
-library("gridExtra") # 2.3
-library("knitr") # 1.28
-library("kableExtra") # 1.1.0
-library("magrittr") # 1.5
-library("mice") # 3.9.0
-library("purrr") # 0.3.4
-library("rcompanion") # 2.3.25
-library("rms") # 6.0.1
-library("splines") # base
-library("tableone") # 12.0.0
-library("tibble") # 3.0.1
-library("tidyr") # 1.1.0
+library("corrr") 
+library("dplyr") 
+library("DT") 
+library("ggplot2") 
+library("glmnet") 
+library("oem") 
+library("gridExtra") 
+library("knitr") 
+library("kableExtra") 
+library("magrittr") 
+library("mice") 
+library("purrr") 
+library("rcompanion") 
+library("rms") 
+library("splines") 
+library("tableone") 
+library("tibble") 
+library("tidyr") 
 
 # Namespace clash
 select <- dplyr::select
@@ -1883,7 +1883,7 @@ make_validation_tbl(lrm_val_all)
 ## Calibration curves {#calibration-train}
 We will first use the bootstrap so that we can generate bias adjusted predictions. 
 
-```{r calCurve, cache = TRUE}
+```{r calCurveTrain, cache = TRUE}
 # Calibrate
 lrm_cal_age <- calibrate(lrm_fit_age, B = n_boot_val)
 lrm_cal_c <- calibrate(lrm_fit_c, B = n_boot_val)
@@ -2110,7 +2110,7 @@ summarize_performance(val_train = lrm_val_train, val_test = lrm_val_test)
 ## Calibration curves {#calibration-test}
 Like we did with the training set, we will plot calibration curves. 
 
-```{r}
+```{r calCurveTest}
 make_cal_test_data <- function(data, p , model_names){
   data[, c("died", ".imp", p)] %>%
     pivot_longer(cols = c(p), names_to = "model",
